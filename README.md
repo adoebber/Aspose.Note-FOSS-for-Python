@@ -3,11 +3,11 @@
 [![CI](https://github.com/aspose-note/aspose-note-python/actions/workflows/ci.yml/badge.svg)](https://github.com/aspose-note/aspose-note-python/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/aspose-note.svg)](https://pypi.org/project/aspose-note/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/aspose-note.svg)](https://pypi.org/project/aspose-note/)
-[![License](https://img.shields.io/pypi/l/aspose-note.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Quick links: [📚 Examples](examples/) • [📦 PyPI](https://pypi.org/project/aspose-note/)
 
-✅ **Official Aspose project** — **100% free & open-source (Split License; see https://www.aspose.org/)**. Provides an Aspose.Note-compatible Python API for working with OneNote `.one` files.
+✅ **Official Aspose project** — **100% free & open-source**. Provides an Aspose.Note-compatible Python API for working with OneNote `.one` files.
 
 This repository provides a Python library with an **Aspose.Note-shaped public API** for reading Microsoft OneNote files (`.one`).
 
