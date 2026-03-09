@@ -1,0 +1,1143 @@
+; =============================================================================
+; Microsoft OneNote Revision Store (.one) Binary Format Specification
+; Encoded in TOON v3.0 (Token-Oriented Object Notation)
+; Sources: [MS-ONESTORE] v20250520, [MS-ONE] v20221115
+; =============================================================================
+
+format:
+  name: OneNote Revision Store
+  extensions: .one, .onetoc2
+  spec_version: MS-ONESTORE v20250520
+  semantic_layer: MS-ONE v20221115
+  byte_order: little-endian
+  description: Binary file format for OneNote revision-based storage of sections and notebooks
+
+; =============================================================================
+; 1. MAGIC CONSTANTS & GUIDs
+; =============================================================================
+
+magic_constants:
+  header_signature: 0xA4567AB1F5F7F4C4
+  footer_signature: 0x8BC215C38233BA4B
+  file_data_store_header_guid: {BDE316E7-2665-4511-A4C4-8D4D0B7A9EAC}
+  file_data_store_footer_guid: {71FBA722-0F79-4A0B-BB13-899256426B24}
+  encryption_header: 0xFB6BA385DAD1A067
+  encryption_footer: 0x2649294F8E198B3C
+
+file_type_guids[2]{guid,ffv,description}:
+  {7B5C52E4-D88C-4DA7-AEB1-5378D02996D3}, 0x2A, OneNote section (.one)
+  {43FF2FA1-EFD9-4C76-9EE2-10EA5722765F}, 0x1B, Table of contents (.onetoc2)
+
+; =============================================================================
+; 2. COMMON TYPES (section 2.2)
+; =============================================================================
+
+ExtendedGUID:
+  description: Globally unique identifier extended with an unsigned integer
+  fields[2]{name,size,type}:
+    guid, 16 bytes, GUID
+    n, 4 bytes, uint32
+  null_value: {{00000000-0000-0000-0000-000000000000}\, 0}
+  total_size: 20 bytes
+
+CompactID:
+  description: Compact identifier referencing a global identification table entry
+  fields[3]{name,bits,type}:
+    n, 8, uint8 — index into ExtendedGUID.n
+    guidIndex, 24, uint24 — index into global identification table
+  total_size: 4 bytes
+  bit_packing: stored as little-endian uint32 where bits[0..7]=n and bits[8..31]=guidIndex
+  resolution_note: CompactID MUST be resolved using the active GlobalIdTable in the declaration context
+
+StringInStorageBuffer:
+  description: UTF-16LE length-prefixed string
+  fields[2]{name,size,type}:
+    cch, 4 bytes, uint32 — character count
+    StringData, cch*2 bytes, UTF-16LE string
+
+; --- File Chunk References ---
+
+FileChunkReference32:
+  description: 32-bit offset and size reference
+  fields[2]{name,size,type}:
+    stp, 4 bytes, uint32 — file position (stream pointer)
+    cb, 4 bytes, uint32 — byte count (size)
+  total_size: 8 bytes
+  fcrNil: stp=0xFFFFFFFF cb=0x00000000
+  fcrZero: stp=0x00000000 cb=0x00000000
+
+FileChunkReference64:
+  description: 64-bit offset and size reference
+  fields[2]{name,size,type}:
+    stp, 8 bytes, uint64 — file position
+    cb, 8 bytes, uint64 — byte count
+  total_size: 16 bytes
+
+FileChunkReference64x32:
+  description: 64-bit offset with 32-bit size
+  fields[2]{name,size,type}:
+    stp, 8 bytes, uint64 — file position
+    cb, 4 bytes, uint32 — byte count
+  total_size: 12 bytes
+
+FileNodeChunkReference:
+  description: Variable-format chunk reference inside a FileNode
+  note: Format determined by FileNode.StpFormat and FileNode.CbFormat fields
+  stp_formats[4]{StpFormat,size,type}:
+    0, 8 bytes, uncompressed 64-bit
+    1, 4 bytes, uncompressed 32-bit
+    2, 2 bytes, compressed ×8 (multiply value by 8)
+    3, 4 bytes, compressed ×8 (multiply value by 8)
+  cb_formats[4]{CbFormat,size,type}:
+    0, 4 bytes, uncompressed 32-bit
+    1, 8 bytes, uncompressed 64-bit
+    2, 1 byte, compressed ×8 (multiply value by 8)
+    3, 2 bytes, compressed ×8 (multiply value by 8)
+
+; =============================================================================
+; 3. FILE HEADER (section 2.3.1)
+; =============================================================================
+
+Header:
+  description: File header at offset 0; size 1024 bytes
+  fields[20]{name,offset,size,type,description}:
+    guidFileType, 0, 16, GUID, identifies .one or .onetoc2 per file_type_guids
+    guidFile, 16, 16, GUID, unique file identity
+    guidLegacyFileVersion, 32, 16, GUID, MUST be {00000000-0000-0000-0000-000000000000}
+    guidFileFormat, 48, 16, GUID, MUST be {109ADD3F-911B-49F5-A5D0-1791EDC8AED8}
+    ffvLastCodeThatWroteToThisFile, 64, 4, uint32, writer version (.one=0x0000002A or 0x0000002B)
+    ffvOldestCodeThatHasWrittenToThisFile, 68, 4, uint32, oldest writer version
+    ffvNewestCodeThatHasWrittenToThisFile, 72, 4, uint32, newest writer version
+    ffvOldestCodeThatMayReadThisFile, 76, 4, uint32, minimum reader version
+    fcrLegacyFreeChunkList, 80, 8, FileChunkReference32, MUST be fcrZero
+    fcrLegacyTransactionLog, 88, 8, FileChunkReference32, MUST be fcrZero
+    cTransactionsInLog, 96, 4, uint32, transaction count in log
+    cbLegacyExpectedFileLength, 100, 4, uint32, MUST be zero
+    rgbPlaceholder, 104, 8, uint64, MUST be zero
+    fcrLegacyFileNodeListRoot, 112, 8, FileChunkReference32, MUST be fcrNil
+    cbLegacyFreeSpaceInFreeChunkList, 120, 4, uint32, MUST be zero
+    fNeedsDefrag, 124, 1, uint8, 0=ok 1=defrag recommended
+    fRepairedFile, 125, 1, uint8, 0=ok 1=file was repaired
+    fNeedsGarbageCollect, 126, 1, uint8, 0=ok 1=garbage collection recommended
+    fHasNoEmbeddedFileObjects, 127, 1, uint8, 0=may have embedded files 1=no embedded files
+    guidAncestor, 128, 16, GUID, ancestor file identity for merge detection
+    crcName, 144, 4, uint32, CRC of the file name
+  ; After crcName there are additional fields at known offsets:
+  extended_fields[8]{name,offset,size,type,description}:
+    fcrHashedChunkList, 148, 12, FileChunkReference64x32, hashed chunk list
+    fcrTransactionLog, 160, 12, FileChunkReference64x32, current transaction log
+    fcrFileNodeListRoot, 172, 12, FileChunkReference64x32, root file node list
+    fcrFreeChunkList, 184, 12, FileChunkReference64x32, free chunk list
+    cbExpectedFileLength, 196, 8, uint64, expected file length
+    cbFreeSpaceInFreeChunkList, 204, 8, uint64, free space tracking
+    guidFileVersion, 212, 16, GUID, incremented on each write
+    nFileVersionGeneration, 228, 8, uint64, version generation counter
+    ; remaining bytes to offset 1024 are reserved (MUST be zero)
+
+; =============================================================================
+; 4. FREE CHUNK LIST (section 2.3.2)
+; =============================================================================
+
+FreeChunkListFragment:
+  description: Fragment of free chunk list; linked list of free chunks
+  fields[3]{name,size,type}:
+    crc, 4 bytes, uint32 — CRC of fragment data
+    fcrNextChunk, 12 bytes, FileChunkReference64x32 — next fragment (fcrZero if last)
+    rgFreeChunks, variable, array of FileChunkReference64x32 — free regions
+  note: Count derived from (fragment_size - 16) / 12
+
+; =============================================================================
+; 5. TRANSACTION LOG (section 2.3.3)
+; =============================================================================
+
+TransactionLogFragment:
+  description: Fragment of transaction log
+  fields[3]{name,size,type}:
+    sizeTable, variable, array of TransactionEntry — transaction entries
+    nextFragment, 12 bytes, FileChunkReference64x32 — next fragment (fcrZero if last)
+    padding, variable, bytes — alignment padding
+
+TransactionEntry:
+  description: Single transaction entry in the log
+  fields[3]{name,size,type}:
+    srcID, 4 bytes, uint32 — identifies the FileNodeListFragment
+    TransactionEntrySwitch, 4 bytes, uint32 — incremented each write; 0x00000001 marks sentinel
+
+HashedChunkDescriptor2FND:
+  description: File Node Data for hashed chunk descriptors
+  fields[3]{name,size,type}:
+    BlobRef, variable, FileNodeChunkReference — reference to data
+    guidHash, 16 bytes, GUID — MD5 hash of referenced data
+    cb, 8 bytes, uint64 — byte count of referenced data
+
+; =============================================================================
+; 6. FILE NODE LISTS (section 2.4)
+; =============================================================================
+
+FileNodeListFragment:
+  description: A contiguous block of FileNode structures forming a fragment of a file node list
+  fields[3]{name,type,description}:
+    header, FileNodeListHeader, list identification
+    rgFileNodes, array of FileNode, the nodes in this fragment
+    footer, FileNodeListFragment_Footer, next-fragment pointer and padding
+
+FileNodeListHeader:
+  description: 16-byte header at start of each FileNodeListFragment
+  fields[3]{name,size,type}:
+    uintMagic, 8 bytes, uint64 — MUST be 0xA4567AB1F5F7F4C4
+    FileNodeListID, 4 bytes, uint32 — unique list identifier
+    nFragmentSequence, 4 bytes, uint32 — 0-based fragment index
+
+FileNodeListFragment_Footer:
+  description: Footer terminating a FileNodeListFragment
+  fields[3]{name,size,type}:
+    nextFragment, 12 bytes, FileChunkReference64x32 — next fragment (fcrZero if last)
+    padding, variable, bytes — MUST be zero (fills remaining space to cb boundary)
+    uintMagicFooter, 8 bytes, uint64 — MUST be 0x8BC215C38233BA4B
+
+; =============================================================================
+; 7. FILE NODE (section 2.4.3) — core parsing unit
+; =============================================================================
+
+FileNode:
+  description: Variable-size structure; header is a 4-byte bitfield
+  bitfield[7]{name,bits,description}:
+    FileNodeID, 10, identifies the node type (see FileNodeID_Table)
+    Size, 13, size in bytes of this FileNode structure
+    StpFormat, 2, format of stp in FileNodeChunkReference
+    CbFormat, 2, format of cb in FileNodeChunkReference
+    BaseType, 4, data location (0=no ref\, 1=data ref\, 2=list ref)
+    Reserved, 1, MUST be zero
+  data:
+    fnd, variable, FileNode data — type-specific structure per FileNodeID
+    ref, variable, FileNodeChunkReference — present when BaseType != 0
+  layout_note: For BaseType 1/2 nodes, parsers SHOULD read FileNodeChunkReference from the start of fnd payload, then parse the remaining body
+
+; --- BaseType semantics ---
+; BaseType 0: no external data — all data inline in fnd
+; BaseType 1: ref points to data (ObjectSpaceObjectPropSet or similar)
+; BaseType 2: ref points to another FileNodeListFragment (list continuation)
+; Interop note: in production .one files BaseType 1/2 node bodies are encoded as [ref][body]
+
+; =============================================================================
+; 8. FILE NODE ID TABLE (section 2.4.3)
+; =============================================================================
+
+FileNodeID_Table[31]{id_hex,name,BaseType,formats,section}:
+  0x004, ObjectSpaceManifestRootFND, 0, .one, 2.5.1
+  0x008, ObjectSpaceManifestListReferenceFND, 2, .one, 2.5.2
+  0x00C, ObjectSpaceManifestListStartFND, 0, .one, 2.5.3
+  0x010, RevisionManifestListReferenceFND, 2, .one, 2.5.4
+  0x014, RevisionManifestListStartFND, 0, .one/.onetoc2, 2.5.5
+  0x01B, RevisionManifestStart4FND, 0, .one, 2.5.6
+  0x01C, RevisionManifestEndFND, 0, .one/.onetoc2, —
+  0x01E, RevisionManifestStart6FND, 0, .one/.onetoc2, 2.5.7
+  0x01F, RevisionManifestStart7FND, 0, .one, 2.5.8
+  0x021, GlobalIdTableStartFNDX, 0, .one/.onetoc2, 2.5.9
+  0x022, GlobalIdTableEndFNDX, 0, .one/.onetoc2, —
+  0x024, GlobalIdTableEntryFNDX, 0, .one/.onetoc2, 2.5.10
+  0x025, GlobalIdTableEntry2FNDX, 0, .one/.onetoc2, 2.5.11
+  0x026, GlobalIdTableEntry3FNDX, 0, .one/.onetoc2, 2.5.12
+  0x02D, ObjectDeclarationWithRefCountFNDX, 1, .one/.onetoc2, 2.5.23
+  0x02E, ObjectDeclarationWithRefCount2FNDX, 1, .one/.onetoc2, 2.5.24
+  0x041, ObjectRevisionWithRefCountFNDX, 1, .one/.onetoc2, 2.5.13
+  0x042, ObjectRevisionWithRefCount2FNDX, 1, .one/.onetoc2, 2.5.14
+  0x059, RootObjectReference2FNDX, 0, .one/.onetoc2, 2.5.15
+  0x05A, RootObjectReference3FND, 0, .one, 2.5.16
+  0x05C, RevisionRoleDeclarationFND, 0, .one/.onetoc2, 2.5.17
+  0x05D, RevisionRoleAndContextDeclarationFND, 0, .one, 2.5.18
+  0x072, ObjectDeclarationFileData3RefCountFND, 0, .one, 2.5.27
+  0x073, ObjectDeclarationFileData3LargeRefCountFND, 0, .one, 2.5.28
+  0x084, ObjectDataEncryptionKeyV2FNDX, 1, .one, 2.5.19
+  0x08C, DataSignatureGroupDefinitionFND, 0, .one, 2.5.33
+  0x090, FileDataStoreListReferenceFND, 2, .one, 2.5.21
+  0x094, FileDataStoreObjectReferenceFND, 1, .one, 2.5.22
+  0x0A4, ObjectDeclaration2RefCountFND, 1, .one/.onetoc2, 2.5.25
+  0x0A5, ObjectDeclaration2LargeRefCountFND, 1, .one/.onetoc2, 2.5.26
+  0x0B0, ObjectGroupListReferenceFND, 2, .one/.onetoc2, 2.5.31
+  0x0B4, ObjectGroupStartFND, 0, .one/.onetoc2, 2.5.32
+  0x0B8, ObjectGroupEndFND, 0, .one/.onetoc2, —
+  0x0C2, ObjectInfoDependencyOverridesFND, 1, .one/.onetoc2, 2.5.20
+  0x0C4, ReadOnlyObjectDeclaration2RefCountFND, 1, .one, 2.5.29
+  0x0C5, ReadOnlyObjectDeclaration2LargeRefCountFND, 1, .one, 2.5.30
+  0x0FF, ChunkTerminatorFND, 0, .one/.onetoc2, —
+
+FileNodeID_InteroperabilityNotes[3]{id_hex,note}:
+  0x022, In some ObjectGroup streams this node appears as an effective GlobalIdTable start delimiter
+  0x028, Observed in .one files as an effective GlobalIdTable end delimiter inside ObjectGroup (not listed in canonical ID table)
+  0x0C4/0x0C5, ReadOnly object declarations are common and SHOULD be parsed as ObjectDeclaration2 body plus trailing 16-byte md5Hash
+
+; =============================================================================
+; 9. FILE NODE DATA STRUCTURES (sections 2.5.x)
+; =============================================================================
+
+; --- 2.5.1 ObjectSpaceManifestRootFND ---
+ObjectSpaceManifestRootFND:
+  description: Specifies the root of the object space manifest
+  fields[1]{name,size,type}:
+    gosidRoot, 20 bytes, ExtendedGUID — identity of the root object space
+
+; --- 2.5.2 ObjectSpaceManifestListReferenceFND ---
+ObjectSpaceManifestListReferenceFND:
+  description: Reference to an object space manifest list
+  fields[2]{name,size,type}:
+    ref, variable, FileNodeChunkReference — location of first FileNodeListFragment
+    gosid, 20 bytes, ExtendedGUID — identity of the object space
+
+; --- 2.5.3 ObjectSpaceManifestListStartFND ---
+ObjectSpaceManifestListStartFND:
+  description: Beginning of an object space manifest list
+  fields[1]{name,size,type}:
+    gosid, 20 bytes, ExtendedGUID — identity of the object space
+
+; --- 2.5.4 RevisionManifestListReferenceFND ---
+RevisionManifestListReferenceFND:
+  description: Reference to a revision manifest list
+  fields[1]{name,size,type}:
+    ref, variable, FileNodeChunkReference — location of first fragment
+
+; --- 2.5.5 RevisionManifestListStartFND ---
+RevisionManifestListStartFND:
+  description: Beginning of a revision manifest list
+  fields[2]{name,size,type}:
+    gosid, 20 bytes, ExtendedGUID — identity of the object space being revised
+    nInstance, 4 bytes, uint32 — MUST be ignored
+
+; --- 2.5.6 RevisionManifestStart4FND ---
+RevisionManifestStart4FND:
+  description: Beginning of a revision manifest (default context)
+  fields[5]{name,size,type}:
+    rid, 20 bytes, ExtendedGUID — revision identity
+    ridDependent, 20 bytes, ExtendedGUID — dependency revision (null=none)
+    timeCreation, 8 bytes, uint64 — undefined\, MUST be ignored
+    RevisionRole, 4 bytes, int32 — revision role label
+    odcsDefault, 2 bytes, uint16 — encryption (0=none)
+
+; --- 2.5.7 RevisionManifestStart6FND ---
+RevisionManifestStart6FND:
+  description: Beginning of a revision manifest (default context\, extended)
+  fields[4]{name,size,type}:
+    rid, 20 bytes, ExtendedGUID — revision identity
+    ridDependent, 20 bytes, ExtendedGUID — dependency revision
+    RevisionRole, 4 bytes, int32 — revision role label
+    odcsDefault, 2 bytes, uint16 — 0x0000=no encryption\, 0x0002=encrypted
+
+; --- 2.5.8 RevisionManifestStart7FND ---
+RevisionManifestStart7FND:
+  description: Beginning of a revision manifest with explicit context
+  fields[2]{name,size,type}:
+    base, 46 bytes, RevisionManifestStart6FND — identity and attributes
+    gctxid, 20 bytes, ExtendedGUID — context identifier
+  context_note: Revisions for one gosid can alternate between contexts; "latest" revision selection SHOULD be done per (gosid, gctxid, role)
+
+; --- 2.5.9-2.5.12 Global Identification Table ---
+GlobalIdTableStartFNDX:
+  description: Beginning of a global identification table (FileNodeID=0x021)
+  fields[1]{name,size,type}:
+    Reserved, 1 byte, uint8 — MUST be zero
+  inheritance_note: Table state is logically inherited from ridDependent mapping; Entry2/Entry3 apply remapping/copy from dependency entries
+
+GlobalIdTableEntryFNDX:
+  description: Entry in a global identification table (FileNodeID=0x024)
+  fields[2]{name,size,type}:
+    index, 4 bytes, uint32 — entry index (< 0xFFFFFF)
+    guid, 16 bytes, GUID — globally unique identifier for this entry
+
+GlobalIdTableEntry2FNDX:
+  description: Entry copied from dependency revision (FileNodeID=0x025)
+  fields[2]{name,size,type}:
+    iIndexMapFrom, 4 bytes, uint32 — source index in dependency table
+    iIndexMapTo, 4 bytes, uint32 — target index in current table
+
+GlobalIdTableEntry3FNDX:
+  description: Range of entries copied from dependency revision (FileNodeID=0x026)
+  fields[3]{name,size,type}:
+    iIndexCopyFromStart, 4 bytes, uint32 — source start index
+    cEntriesToCopy, 4 bytes, uint32 — count of entries to copy
+    iIndexCopyToStart, 4 bytes, uint32 — target start index
+
+GlobalIdTable_ScopeNote:
+  description: Global ID entries can be present in both RevisionManifest and ObjectGroup streams
+  guidance: Parser SHOULD accept 0x024/0x025/0x026 in either scope and apply changes to the currently active mapping
+
+; --- 2.5.13 ObjectRevisionWithRefCountFNDX ---
+ObjectRevisionWithRefCountFNDX:
+  description: Revised object data (FileNodeID=0x041)
+  fields[5]{name,size,type}:
+    ref, variable, FileNodeChunkReference — ObjectSpaceObjectPropSet location
+    oid, 4 bytes, CompactID — object identity
+    fHasOidReferences, 1 bit, bool — has object references
+    fHasOsidReferences, 1 bit, bool — has object space references
+    cRef, 6 bits, uint6 — reference count
+
+; --- 2.5.14 ObjectRevisionWithRefCount2FNDX ---
+ObjectRevisionWithRefCount2FNDX:
+  description: Revised object data with large ref count (FileNodeID=0x042)
+  fields[6]{name,size,type}:
+    ref, variable, FileNodeChunkReference — ObjectSpaceObjectPropSet location
+    oid, 4 bytes, CompactID — object identity
+    fHasOidReferences, 1 bit, bool — has object references
+    fHasOsidReferences, 1 bit, bool — has object space references
+    Reserved, 30 bits, — MUST be zero
+    cRef, 4 bytes, uint32 — reference count
+
+; --- 2.5.15-2.5.16 Root Object References ---
+RootObjectReference2FNDX:
+  description: Root object of a revision for a particular role (FileNodeID=0x059)
+  fields[2]{name,size,type}:
+    oidRoot, 4 bytes, CompactID — root object identity
+    RootRole, 4 bytes, uint32 — role of the root object
+
+RootObjectReference3FND:
+  description: Root object of a revision (extended) (FileNodeID=0x05A)
+  fields[2]{name,size,type}:
+    oidRoot, 20 bytes, ExtendedGUID — root object identity
+    RootRole, 4 bytes, uint32 — role of the root object
+
+RootRole_Values[4]{value,name,description}:
+  0x00000001, DefaultContentRoot, default content root
+  0x00000002, MetadataRoot, metadata root
+  0x00000003, EncryptionKeyRoot, encryption key root (only if encrypted)
+  0x00000004, VersionMetadataRoot, version metadata root
+
+; --- 2.5.17-2.5.18 Revision Role Declarations ---
+RevisionRoleDeclarationFND:
+  description: Additional revision role for default context (FileNodeID=0x05C)
+  fields[2]{name,size,type}:
+    rid, 20 bytes, ExtendedGUID — revision identity
+    RevisionRole, 4 bytes, int32 — revision role for default context
+
+RevisionRoleAndContextDeclarationFND:
+  description: Additional revision role + context pair (FileNodeID=0x05D)
+  fields[2]{name,size,type}:
+    base, 24 bytes, RevisionRoleDeclarationFND — revision and role
+    gctxid, 20 bytes, ExtendedGUID — context identifier
+  selection_note: For content extraction, select latest roots per context-role instead of collapsing to one root per gosid
+
+; --- 2.5.19 ObjectDataEncryptionKeyV2FNDX ---
+ObjectDataEncryptionKeyV2FNDX:
+  description: Encryption key for an object space (FileNodeID=0x084)
+  fields[1]{name,size,type}:
+    ref, variable, FileNodeChunkReference — references {Header\, EncryptionData\, Footer}
+  ref_target_layout[3]{name,size,type}:
+    Header, 8 bytes, uint64 — MUST be 0xFB6BA385DAD1A067
+    EncryptionData, variable, bytes — MUST be ignored
+    Footer, 8 bytes, uint64 — MUST be 0x2649294F8E198B3C
+
+; --- 2.5.20 ObjectInfoDependencyOverridesFND ---
+ObjectInfoDependencyOverridesFND:
+  description: Updated reference counts for objects (FileNodeID=0x0C2)
+  fields[2]{name,size,type}:
+    ref, variable, FileNodeChunkReference — ObjectInfoDependencyOverrideData (if not fcrNil)
+    data, variable, ObjectInfoDependencyOverrideData — inline data (if ref is fcrNil)
+
+; --- 2.5.21-2.5.22 File Data Store ---
+FileDataStoreListReferenceFND:
+  description: Reference to file data store list (FileNodeID=0x090)
+  fields[1]{name,size,type}:
+    ref, variable, FileNodeChunkReference — FileNodeListFragment
+
+FileDataStoreObjectReferenceFND:
+  description: Reference to a file data object (FileNodeID=0x094)
+  fields[2]{name,size,type}:
+    ref, variable, FileNodeChunkReference — FileDataStoreObject
+    guidReference, 16 bytes, GUID — unique identity of this file data object
+
+; --- 2.5.23-2.5.26 Object Declarations ---
+ObjectDeclarationWithRefCountFNDX:
+  description: Object with 1-byte ref count (FileNodeID=0x02D)
+  fields[3]{name,size,type}:
+    ObjectRef, variable, FileNodeChunkReference — ObjectSpaceObjectPropSet
+    body, 10 bytes, ObjectDeclarationWithRefCountBody — identity/attributes
+    cRef, 1 byte, uint8 — reference count
+
+ObjectDeclarationWithRefCount2FNDX:
+  description: Object with 4-byte ref count (FileNodeID=0x02E)
+  fields[3]{name,size,type}:
+    ObjectRef, variable, FileNodeChunkReference — ObjectSpaceObjectPropSet
+    body, 10 bytes, ObjectDeclarationWithRefCountBody — identity/attributes
+    cRef, 4 bytes, uint32 — reference count
+
+ObjectDeclaration2RefCountFND:
+  description: Object with 1-byte ref count v2 (FileNodeID=0x0A4)
+  fields[3]{name,size,type}:
+    BlobRef, variable, FileNodeChunkReference — ObjectSpaceObjectPropSet
+    body, 9 bytes, ObjectDeclaration2Body — identity/attributes
+    cRef, 1 byte, uint8 — reference count
+
+ObjectDeclaration2LargeRefCountFND:
+  description: Object with 4-byte ref count v2 (FileNodeID=0x0A5)
+  fields[3]{name,size,type}:
+    BlobRef, variable, FileNodeChunkReference — ObjectSpaceObjectPropSet
+    body, 9 bytes, ObjectDeclaration2Body — identity/attributes
+    cRef, 4 bytes, uint32 — reference count
+
+; --- 2.5.27-2.5.28 File Data Object Declarations ---
+ObjectDeclarationFileData3RefCountFND:
+  description: Object referencing file data (FileNodeID=0x072)
+  fields[5]{name,size,type}:
+    oid, 4 bytes, CompactID — object identity
+    jcid, 4 bytes, JCID — object type
+    cRef, 1 byte, uint8 — reference count
+    FileDataReference, variable, StringInStorageBuffer — reference target (<file>\, <ifndf>\, <invfdo>)
+    Extension, variable, StringInStorageBuffer — file extension including period
+  parsing_note: BaseType=0 for 0x072/0x073; these nodes keep payload inline and do not carry external ObjectSpaceObjectPropSet BlobRef
+
+ObjectDeclarationFileData3LargeRefCountFND:
+  description: Object referencing file data with large ref count (FileNodeID=0x073)
+  fields[5]{name,size,type}:
+    oid, 4 bytes, CompactID — object identity
+    jcid, 4 bytes, JCID — object type
+    cRef, 4 bytes, uint32 — reference count
+    FileDataReference, variable, StringInStorageBuffer — reference target
+    Extension, variable, StringInStorageBuffer — file extension including period
+
+FileDataReference_Prefixes[3]{prefix,type,remaining}:
+  <file>, file in onefiles folder, UUID-named .onebin file
+  <ifndf>, FileDataStoreObject, curly-braced GUID matching guidReference
+  <invfdo>, invalid reference, empty string
+
+; --- 2.5.29-2.5.30 ReadOnly Object Declarations ---
+ReadOnlyObjectDeclaration2RefCountFND:
+  description: Read-only object with 1-byte ref count (FileNodeID=0x0C4)
+  fields[2]{name,size,type}:
+    base, variable, ObjectDeclaration2RefCountFND — identity/attributes (jcid.IsReadOnly=true)
+    md5Hash, 16 bytes, MD5 hash of referenced data
+  interoperability_note: Parse `base` identically to ObjectDeclaration2RefCountFND for oid/jcid/ref extraction
+
+ReadOnlyObjectDeclaration2LargeRefCountFND:
+  description: Read-only object with 4-byte ref count (FileNodeID=0x0C5)
+  fields[2]{name,size,type}:
+    base, variable, ObjectDeclaration2LargeRefCountFND — identity/attributes (jcid.IsReadOnly=true)
+    md5Hash, 16 bytes, MD5 hash of referenced data
+  interoperability_note: Parse `base` identically to ObjectDeclaration2LargeRefCountFND for oid/jcid/ref extraction
+
+; --- 2.5.31-2.5.33 Object Groups ---
+ObjectGroupListReferenceFND:
+  description: Reference to an object group (FileNodeID=0x0B0)
+  fields[2]{name,size,type}:
+    ref, variable, FileNodeChunkReference — first fragment of group list
+    ObjectGroupID, 20 bytes, ExtendedGUID — group identity
+
+ObjectGroupStartFND:
+  description: Beginning of an object group (FileNodeID=0x0B4)
+  fields[1]{name,size,type}:
+    oid, 20 bytes, ExtendedGUID — group identity
+
+DataSignatureGroupDefinitionFND:
+  description: Signature for data integrity within a group (FileNodeID=0x08C)
+  parser_guidance: If signature validation is out of scope, parsers MAY ignore this node for tree traversal and text extraction
+  fields[1]{name,size,type}:
+    DataSignatureGroup, 20 bytes, ExtendedGUID — signature identifier
+
+; =============================================================================
+; 10. OTHER STRUCTURES (section 2.6)
+; =============================================================================
+
+; --- 2.6.1 ObjectSpaceObjectPropSet ---
+ObjectSpaceObjectPropSet:
+  description: Core data structure for an object; carries property set and references
+  fields[5]{name,type,description}:
+    OIDs, ObjectSpaceObjectStreamOfOIDs, object references (CompactID array)
+    OSIDs, ObjectSpaceObjectStreamOfOSIDs, object space references (optional)
+    ContextIDs, ObjectSpaceObjectStreamOfContextIDs, context references (optional)
+    body, PropertySet, the properties of this object
+    padding, bytes, zero-padding to 8-byte boundary (0-7 bytes)
+  note: OSIDs present iff OIDs.header.OsidStreamNotPresent==false; ContextIDs present iff OSIDs.header.ExtendedStreamsPresent==true
+
+; --- 2.6.2-2.6.4 Object Space Object Streams ---
+ObjectSpaceObjectStreamOfOIDs:
+  description: Stream of object IDs referenced by a property set
+  fields[2]{name,type,description}:
+    header, ObjectSpaceObjectStreamHeader (4 bytes), count and stream presence flags
+    body, array of CompactID, the referenced object identities
+
+ObjectSpaceObjectStreamOfOSIDs:
+  description: Stream of object space IDs
+  fields[2]{name,type,description}:
+    header, ObjectSpaceObjectStreamHeader (4 bytes), count and stream presence flags
+    body, array of CompactID, the referenced object space identities
+
+ObjectSpaceObjectStreamOfContextIDs:
+  description: Stream of context IDs
+  fields[2]{name,type,description}:
+    header, ObjectSpaceObjectStreamHeader (4 bytes), count and flags (both must be false)
+    body, array of CompactID, the referenced context identities
+
+; --- 2.6.5 ObjectSpaceObjectStreamHeader ---
+ObjectSpaceObjectStreamHeader:
+  description: 4-byte bitfield header for object streams
+  bitfield[4]{name,bits,description}:
+    Count, 24, number of CompactID structures in the stream
+    Reserved, 6, MUST be zero
+    ExtendedStreamsPresent, 1, true if additional streams (ContextIDs) follow
+    OsidStreamNotPresent, 1, true if no OSIDs or ContextIDs
+
+; --- 2.6.6 PropertyID ---
+PropertyID:
+  description: 4-byte bitfield identifying a property and its data location
+  bitfield[3]{name,bits,description}:
+    id, 26, property identity (meanings defined in MS-ONE section 2.1.12)
+    type, 5, data type and size (see PropertyType_Values)
+    boolValue, 1, boolean value (valid only when type=0x2)
+
+PropertyType_Values[14]{value,name,data_size,location}:
+  0x1, NoData, 0, —
+  0x2, Bool, 0, boolValue bit in PropertyID
+  0x3, OneByteOfData, 1, PropertySet.rgData
+  0x4, TwoBytesOfData, 2, PropertySet.rgData
+  0x5, FourBytesOfData, 4, PropertySet.rgData
+  0x6, EightBytesOfData, 8, PropertySet.rgData
+  0x7, FourBytesOfLengthFollowedByData, variable, PropertySet.rgData (prtFourBytesOfLengthFollowedByData)
+  0x8, ObjectID, 4 (1 CompactID), ObjectSpaceObjectPropSet.OIDs.body
+  0x9, ArrayOfObjectIDs, 4 (count in rgData), ObjectSpaceObjectPropSet.OIDs.body
+  0xA, ObjectSpaceID, 4 (1 CompactID), ObjectSpaceObjectPropSet.OSIDs.body
+  0xB, ArrayOfObjectSpaceIDs, 4 (count in rgData), ObjectSpaceObjectPropSet.OSIDs.body
+  0xC, ContextID, 4 (1 CompactID), ObjectSpaceObjectPropSet.ContextIDs.body
+  0xD, ArrayOfContextIDs, 4 (count in rgData), ObjectSpaceObjectPropSet.ContextIDs.body
+  0x10, ArrayOfPropertyValues, variable, PropertySet.rgData (prtArrayOfPropertyValues)
+  0x11, PropertySet, variable, PropertySet.rgData (child PropertySet)
+
+; --- 2.6.7 PropertySet ---
+PropertySet:
+  description: A set of properties with their data
+  fields[3]{name,size,type}:
+    cProperties, 2 bytes, uint16 — number of properties
+    rgPrids, cProperties × 4 bytes, array of PropertyID — property identifiers
+    rgData, variable, bytes — concatenated property data
+
+; --- 2.6.8 prtFourBytesOfLengthFollowedByData ---
+prtFourBytesOfLengthFollowedByData:
+  description: Variable-length data container
+  fields[2]{name,size,type}:
+    cb, 4 bytes, uint32 — data size in bytes (< 0x40000000)
+    Data, cb bytes, bytes — property data
+
+; --- 2.6.9 prtArrayOfPropertyValues ---
+prtArrayOfPropertyValues:
+  description: Array of property values with the same type
+  fields[3]{name,size,type}:
+    cProperties, 4 bytes, uint32 — count of properties
+    prid, 4 bytes, PropertyID — type descriptor (type MUST be 0x11); absent if cProperties=0
+    Data, variable, bytes — concatenated property data
+
+; --- 2.6.10-2.6.12 Object Info Dependency Overrides ---
+ObjectInfoDependencyOverrideData:
+  description: Updated reference counts (inline or external)
+  fields[5]{name,size,type}:
+    c8BitOverrides, 4 bytes, uint32 — count of Overrides1
+    c32BitOverrides, 4 bytes, uint32 — count of Overrides2
+    crc, 4 bytes, uint32 — CRC of reference counts
+    Overrides1, c8BitOverrides × 5 bytes, array of ObjectInfoDependencyOverride8
+    Overrides2, c32BitOverrides × 8 bytes, array of ObjectInfoDependencyOverride32
+
+ObjectInfoDependencyOverride8:
+  fields[2]{name,size,type}:
+    oid, 4 bytes, CompactID — object identity
+    cRef, 1 byte, uint8 — updated reference count
+
+ObjectInfoDependencyOverride32:
+  fields[2]{name,size,type}:
+    oid, 4 bytes, CompactID — object identity
+    cRef, 4 bytes, uint32 — updated reference count
+
+; --- 2.6.13 FileDataStoreObject ---
+FileDataStoreObject:
+  description: Container for embedded file data
+  fields[6]{name,size,type}:
+    guidHeader, 16 bytes, GUID — MUST be {BDE316E7-2665-4511-A4C4-8D4D0B7A9EAC}
+    cbLength, 8 bytes, uint64 — size of FileData without padding
+    unused, 4 bytes, uint32 — MUST be zero
+    reserved, 8 bytes, uint64 — MUST be zero
+    FileData, cbLength bytes (padded to 8-byte boundary), bytes — file content
+    guidFooter, 16 bytes, GUID — MUST be {71FBA722-0F79-4A0B-BB13-899256426B24}
+
+; --- 2.6.14 JCID ---
+JCID:
+  description: 4-byte type descriptor for objects
+  bitfield[7]{name,bits,description}:
+    index, 16, object type index
+    IsBinary, 1, contains encryption data
+    IsPropertySet, 1, contains a property set
+    IsGraphNode, 1, undefined (ignore)
+    IsFileData, 1, is a file data object (all other flags must be false)
+    IsReadOnly, 1, data must not change when revised
+    Reserved, 11, MUST be zero
+
+; --- 2.6.15 ObjectDeclarationWithRefCountBody ---
+ObjectDeclarationWithRefCountBody:
+  description: Identity and type of an object (10 bytes)
+  fields[7]{name,size,type}:
+    oid, 4 bytes, CompactID — object identity
+    jci, 10 bits, uint10 — JCID.index value (MUST be 0x01)
+    odcs, 4 bits, uint4 — encryption (MUST be 0)
+    fReserved1, 2 bits, — MUST be zero
+    fHasOidReferences, 1 bit, bool — has object references
+    fHasOsidReferences, 1 bit, bool — has object space references (MUST be 0)
+    fReserved2, 30 bits, — MUST be zero
+
+; --- 2.6.16 ObjectDeclaration2Body ---
+ObjectDeclaration2Body:
+  description: Identity and type of an object (9 bytes)
+  fields[5]{name,size,type}:
+    oid, 4 bytes, CompactID — object identity
+    jcid, 4 bytes, JCID — full JCID structure
+    fHasOidReferences, 1 bit, bool — has object references
+    fHasOsidReferences, 1 bit, bool — has object space references
+    fReserved2, 6 bits, — MUST be zero
+
+; =============================================================================
+; 11. CRC ALGORITHM (section 2.1.2 of MS-ONESTORE)
+; =============================================================================
+
+CRC:
+  description: CRC-32 variant used for integrity checks
+  polynomial: 0xAF
+  initial_value: 0x00000000
+  note: Computed cumulatively on sequential 4-byte unsigned integers; see spec for full algorithm
+
+; =============================================================================
+; 12. PROPERTY IDs — MS-ONE section 2.1.12
+; =============================================================================
+
+PropertyID_Table[108]{property_id_hex,name,type_info}:
+  0x08001C00, LayoutTightLayout, Bool
+  0x14001C01, PageWidth, FourBytesOfData (float)
+  0x14001C02, PageHeight, FourBytesOfData (float)
+  0x0C001C03, OutlineElementChildLevel, OneByteOfData (uint8)
+  0x08001C04, Bold, Bool
+  0x08001C05, Italic, Bool
+  0x08001C06, Underline, Bool
+  0x08001C07, Strikethrough, Bool
+  0x08001C08, Superscript, Bool
+  0x08001C09, Subscript, Bool
+  0x1C001C0A, Font, FourBytesOfLengthFollowedByData (WzInAtom string)
+  0x10001C0B, FontSize, TwoBytesOfData (uint16 — half-points)
+  0x14001C0C, FontColor, FourBytesOfData (FontColor)
+  0x14001C0D, Highlight, FourBytesOfData (Highlight color)
+  0x1C001C12, RgOutlineIndentDistance, FourBytesOfLengthFollowedByData
+  0x0C001C13, BodyTextAlignment, OneByteOfData (uint8 enum)
+  0x14001C14, OffsetFromParentHoriz, FourBytesOfData (float)
+  0x14001C15, OffsetFromParentVert, FourBytesOfData (float)
+  0x1C001C1A, NumberListFormat, FourBytesOfLengthFollowedByData
+  0x14001C1B, LayoutMaxWidth, FourBytesOfData (float)
+  0x14001C1C, LayoutMaxHeight, FourBytesOfData (float)
+  0x24001C1F, ContentChildNodes, ArrayOfPropertyValues (OE content children)
+  0x24001C20, ElementChildNodes, ArrayOfPropertyValues (element children)
+  0x08001E1E, EnableHistory, Bool
+  0x1C001C22, RichEditTextUnicode, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x24001C26, ListNodes, ArrayOfPropertyValues (number list nodes)
+  0x1C001C30, NotebookManagementEntityGuid, FourBytesOfLengthFollowedByData (GUID string)
+  0x08001C34, OutlineElementRTL, Bool
+  0x14001C3B, LanguageID, FourBytesOfData (LCID)
+  0x14001C3E, LayoutAlignmentInParent, FourBytesOfData (LayoutAlignment)
+  0x20001C3F, PictureContainer, ObjectID (reference to image data)
+  0x14001C4C, PageMarginTop, FourBytesOfData (float)
+  0x14001C4D, PageMarginBottom, FourBytesOfData (float)
+  0x14001C4E, PageMarginLeft, FourBytesOfData (float)
+  0x14001C4F, PageMarginRight, FourBytesOfData (float)
+  0x1C001C52, ListFont, FourBytesOfLengthFollowedByData (WzInAtom string)
+  0x18001C65, TopologyCreationTimeStamp, EightBytesOfData (FILETIME)
+  0x14001C84, LayoutAlignmentSelf, FourBytesOfData (LayoutAlignment)
+  0x08001C87, IsTitleTime, Bool
+  0x08001C88, IsBoilerText, Bool
+  0x14001C8B, PageSize, FourBytesOfData (uint32 enum)
+  0x08001C8E, PortraitPage, Bool
+  0x08001C91, EnforceOutlineStructure, Bool
+  0x08001C92, EditRootRTL, Bool
+  0x08001CB2, CannotBeSelected, Bool
+  0x08001CB4, IsTitleText, Bool
+  0x08001CB5, IsTitleDate, Bool
+  0x14001CB7, ListRestart, FourBytesOfData (uint32)
+  0x08001CBD, IsLayoutSizeSetByUser, Bool
+  0x14001CCB, ListSpacingMu, FourBytesOfData (float)
+  0x14001CDB, LayoutOutlineReservedWidth, FourBytesOfData (float)
+  0x08001CDC, LayoutResolveChildCollisions, Bool
+  0x08001CDE, IsReadOnly, Bool
+  0x14001CEC, LayoutMinimumOutlineWidth, FourBytesOfData (float)
+  0x14001CF1, LayoutCollisionPriority, FourBytesOfData (uint32)
+  0x1C001CF3, CachedTitleString, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x08001CF9, DescendantsCannotBeMoved, Bool
+  0x10001CFE, RichEditTextLangID, TwoBytesOfData (LCID/2)
+  0x08001CFF, LayoutTightAlignment, Bool
+  0x0C001D01, Charset, OneByteOfData (uint8 — Charset enum)
+  0x14001D09, CreationTimeStamp, FourBytesOfData (Time32)
+  0x08001D0C, Deletable, Bool
+  0x10001D0E, ListMSAAIndex, TwoBytesOfData (uint16)
+  0x14001D0F, PageMarginOriginX, FourBytesOfData (float)
+  0x14001D10, PageMarginOriginY, FourBytesOfData (float)
+  0x08001D13, IsBackground, Bool
+  0x14001D24, IRecordMedia, FourBytesOfData (uint32)
+  0x1C001D3C, CachedTitleStringFromPage, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x14001D57, RowCount, FourBytesOfData (uint32)
+  0x14001D58, ColumnCount, FourBytesOfData (uint32)
+  0x08001D5E, TableBordersVisible, Bool
+  0x24001D5F, StructureElementChildNodes, ArrayOfPropertyValues
+  0x2C001D63, ChildGraphSpaceElementNodes, PropertySet (child)
+  0x1C001D66, TableColumnWidths, FourBytesOfLengthFollowedByData
+  0x1C001D75, Author, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x18001D77, LastModifiedTimeStamp, EightBytesOfData (FILETIME)
+  0x20001D78, AuthorOriginal, ObjectID
+  0x20001D79, AuthorMostRecent, ObjectID
+  0x14001D7A, LastModifiedTime, FourBytesOfData (Time32)
+  0x08001D7C, IsConflictPage, Bool
+  0x1C001D7D, TableColumnsLocked, FourBytesOfLengthFollowedByData
+  0x14001D82, SchemaRevisionInOrderToRead, FourBytesOfData (uint32)
+  0x08001D96, IsConflictObjectForRender, Bool
+  0x20001D9B, EmbeddedFileContainer, ObjectID
+  0x1C001D9C, EmbeddedFileName, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x1C001D9D, SourceFilepath, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x1C001D9E, ConflictingUserName, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x1C001DD7, ImageFilename, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x08001DDB, IsConflictObjectForSelection, Bool
+  0x1C001DE9, IsDeletedGraphSpaceContent, FourBytesOfLengthFollowedByData
+  0x14001DFF, PageLevel, FourBytesOfData (uint32)
+  0x1C001E12, TextRunIndex, FourBytesOfLengthFollowedByData
+  0x24001E13, TextRunFormatting, ArrayOfPropertyValues
+  0x08001E14, Hyperlink, Bool
+  0x0C001E15, UnderlineType, OneByteOfData (uint8 enum)
+  0x08001E16, Hidden, Bool
+  0x08001E19, HyperlinkProtected, Bool
+  0x1C001E20, WzHyperlinkUrl, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x08001E22, TextRunIsEmbeddedObject, Bool
+  0x14001E26, CellShadingColor, FourBytesOfData (COLORREF)
+  0x1C001E58, ImageAltText, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x08003401, MathFormatting, Bool
+  0x2000342C, ParagraphStyle, ObjectID
+  0x1400342E, ParagraphSpaceBefore, FourBytesOfData (float)
+  0x1400342F, ParagraphSpaceAfter, FourBytesOfData (float)
+  0x14003430, ParagraphLineSpacingExact, FourBytesOfData (float)
+  0x24003442, MetaDataObjectsAboveGraphSpace, ArrayOfPropertyValues
+  0x24003458, TextRunDataObject, ArrayOfPropertyValues
+  0x40003499, TextRunData, ArrayOfPropertyValues
+  0x1C00345A, ParagraphStyleId, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x08003462, HasVersionPages, Bool
+  0x10003463, ActionItemType, TwoBytesOfData (uint16)
+  0x10003464, NoteTagShape, TwoBytesOfData (uint16 enum)
+  0x14003465, NoteTagHighlightColor, FourBytesOfData (COLORREF)
+  0x14003466, NoteTagTextColor, FourBytesOfData (COLORREF)
+  0x14003467, NoteTagPropertyStatus, FourBytesOfData (uint32 flags)
+  0x1C003468, NoteTagLabel, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x1400346B, TaskTagDueDate, FourBytesOfData (Time32)
+  0x1400346E, NoteTagCreated, FourBytesOfData (Time32)
+  0x1400346F, NoteTagCompleted, FourBytesOfData (Time32)
+  0x20003488, NoteTagDefinitionOid, ObjectID
+  0x04003489, NoteTagStates, TwoBytesOfData
+  0x10003470, ActionItemStatus, TwoBytesOfData (uint16)
+  0x0C003473, ActionItemSchemaVersion, OneByteOfData (uint8)
+  0x08003476, ReadingOrderRTL, Bool
+  0x0C003477, ParagraphAlignment, OneByteOfData (uint8 enum)
+  0x3400347B, VersionHistoryGraphSpaceContextNodes, PropertySet
+  0x14003480, DisplayedPageNumber, FourBytesOfData (uint32)
+  0x1C00349B, SectionDisplayName, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x1C00348A, NextStyle, FourBytesOfLengthFollowedByData (UTF-16LE)
+  0x200034C8, WebPictureContainer14, ObjectID
+  0x140034CB, ImageUploadState, FourBytesOfData (uint32)
+  0x1C003498, TextExtendedAscii, FourBytesOfLengthFollowedByData (bytes)
+  0x140034CD, PictureWidth, FourBytesOfData (float)
+  0x140034CE, PictureHeight, FourBytesOfData (float)
+
+; =============================================================================
+; 13. JCID (PROPERTY SET) TYPES — MS-ONE section 2.1.13
+; =============================================================================
+
+JCID_Table[29]{jcid_hex,name,FileNodeIDs,description}:
+  0x00120001, jcidReadOnlyPersistablePropertyContainerForAuthor, 0xA1/0xA2, read-only author data
+  0x00020001, jcidPersistablePropertyContainerForTOC, 0x2D/0x2E, TOC root (.onetoc2)
+  0x00020001, jcidPersistablePropertyContainerForTOCSection, 0x2D/0x2E, TOC section entry (.onetoc2)
+  0x00060007, jcidSectionNode, 0xA1/0xA2, section content root
+  0x00060008, jcidPageSeriesNode, 0xA1/0xA2, page series container
+  0x0006000B, jcidPageNode, 0xA1/0xA2, page
+  0x0006000C, jcidOutlineNode, 0xA1/0xA2, outline (ink/text frame)
+  0x0006000D, jcidOutlineElementNode, 0xA1/0xA2, outline element (paragraph)
+  0x0006000E, jcidRichTextOENode, 0xA1/0xA2, rich text content
+  0x00060011, jcidImageNode, 0xA1/0xA2, image
+  0x00060012, jcidNumberListNode, 0xA1/0xA2, numbered/bulleted list formatting
+  0x00060019, jcidOutlineGroup, 0xA1/0xA2, outline group
+  0x00060022, jcidTableNode, 0xA1/0xA2, table
+  0x00060023, jcidTableRowNode, 0xA1/0xA2, table row
+  0x00060024, jcidTableCellNode, 0xA1/0xA2, table cell
+  0x0006002C, jcidTitleNode, 0xA1/0xA2, page title
+  0x00020030, jcidPageMetaData, 0xA1/0xA2, page metadata
+  0x00020031, jcidSectionMetaData, 0xA1/0xA2, section metadata
+  0x00060035, jcidEmbeddedFileNode, 0xA1/0xA2, embedded file
+  0x00060037, jcidPageManifestNode, 0xA1/0xA2, page manifest
+  0x00020038, jcidConflictPageMetaData, 0xA1/0xA2, conflict page metadata
+  0x0006003C, jcidVersionHistoryContent, 0xA1/0xA2, version history content root
+  0x0006003D, jcidVersionProxy, 0xA1/0xA2, version proxy
+  0x00120043, jcidNoteTagSharedDefinitionContainer, 0xC0, shared note tag definitions
+  0x00020044, jcidRevisionMetaData, 0xA1/0xA2, revision metadata
+  0x00020046, jcidVersionHistoryMetaData, 0xA1/0xA2, version history metadata
+  0x0012004D, jcidParagraphStyleObject, 0xC0, paragraph style (reusable)
+  0x0012004D, jcidParagraphStyleObjectForText, 0xC0, paragraph style for text
+
+; =============================================================================
+; 14. SIMPLE TYPE ENUMERATIONS — MS-ONE section 2.3
+; =============================================================================
+
+LayoutAlignment:
+  description: 4-byte bitfield controlling horizontal and vertical alignment
+  bitfield[6]{name,bits,values}:
+    HorizontalAlignment, 3, 0=Center|1=Left|2=Right|3=AtCharPos|4=OutsideMargin
+    fHorizMargin, 1, was margin set
+    VerticalAlignment, 3, 0=Inline|1=Top|2=Middle|3=Bottom
+    fVertMargin, 1, was vert margin set
+    Reserved, 24, MUST be zero
+
+PageSize_Values[13]{value,name,width_inches,height_inches}:
+  0, Auto, —, —
+  1, US_Letter, 8.5, 11
+  2, US_Legal, 8.5, 14
+  5, A4, 8.27, 11.69
+  6, A5, 5.83, 8.27
+  7, B5, 7.17, 10.12
+  11, Custom, —, — (specified by PageWidth/PageHeight)
+  12, A3, 11.69, 16.54
+  13, A6, 4.13, 5.83
+  14, JapanesePostcard, 3.94, 5.83
+  15, IndexCard_3x5, 3, 5
+  16, IndexCard_4x6, 4, 6
+  17, IndexCard_5x8, 5, 8
+
+NoteTagShape_Values[113]{value,name}:
+  0, NoIcon
+  1, GreenCheckBox
+  2, YellowCheckBox
+  3, BlueCheckBox
+  4, GreenStarCheckBox
+  5, YellowStarCheckBox
+  6, BlueStarCheckBox
+  7, GreenExclamationCheckBox
+  8, YellowExclamationCheckBox
+  9, BlueExclamationCheckBox
+  10, GreenRightArrowCheckBox
+  11, YellowRightArrowCheckBox
+  12, BlueRightArrowCheckBox
+  13, YellowStar
+  14, BlueFollowUp
+  15, QuestionMark
+  16, BlueRightArrow
+  17, HighPriority
+  18, ContactInformation
+  19, Meeting
+  20, TimeSensitive
+  21, LightBulb
+  22, Pushpin
+  23, Home
+  24, CommentBubble
+  25, SmilingFace
+  26, AwardRibbon
+  27, KeyYellow
+  28, BlueCheckBox1
+  29, BlueCircle1
+  30, BlueCheckBox2
+  31, BlueCircle2
+  32, BlueCheckBox3
+  33, BlueCircle3
+  34, BlueDiamond
+  35, BlueCheckMark
+  36, BlueX
+  37, BlueXWithDots
+  38, BlueStar
+  39, GreenCheck
+  40, GreenCircle
+  41, GreenFlag
+  42, GreenCheckMark
+  43, GreenStar
+  44, GreenSun
+  45, GreenTarget
+  46, GreenTriangle
+  47, GreenUmbrella
+  48, GreenUpArrow
+  49, GreenXwithDots
+  50, YellowCheckBox
+  51, YellowCircle
+  52, YellowTriangle
+  53, YellowDiamond
+  54, YellowStar2
+  55, RedFollowUp
+  56, PinkBubble
+  57, OrangeSquare
+  58, RedX
+  59, ContactInfoWithImage
+  60, BluePerson
+  61, BlueMusicNote
+  62, BlueGlobe
+  63, BlueMailEnvelope
+  64, BluePhone
+  65, BlueTelephoneWithClock
+  66, BlueQuestion
+  67, BlueTag
+  68, FilmStrip
+  69, BlueLock
+  70, ThreeBlueArrows
+  100, BlueCheckBox1Empty
+  101, BlueCheckBox2Empty
+  102, BlueCheckBox3Empty
+  103, BlueCheckBoxEmpty
+  104, BlueExclamationCheckBoxEmpty
+  105, BluePersonCheckBox
+  106, BlueRightArrowCheckBox2
+  107, BlueStarCheckBoxEmpty
+  108, GreenCheckBox1Empty
+  109, GreenCheckBox2Empty
+  110, GreenCheckBox3Empty
+  111, GreenCheckBoxEmpty
+  112, GreenExclamationCheckBoxEmpty
+  113, GreenFlagCheckBoxEmpty
+  114, GreenPersonCheckBox
+  115, GreenRightArrowCheckBoxEmpty
+  116, GreenStarCheckBoxEmpty
+  117, RedFlagCheckBoxEmpty
+  118, YellowCheckBox1Empty
+  119, YellowCheckBox2Empty
+  120, YellowCheckBox3Empty
+  121, YellowCheckBoxEmpty
+  122, YellowExclamationCheckBoxEmpty
+  123, YellowPersonCheckBox
+  124, YellowRightArrowCheckBoxEmpty
+  125, YellowStarCheckBoxEmpty
+
+Charset_Values[18]{value,name}:
+  0, ANSI_CHARSET
+  1, DEFAULT_CHARSET
+  2, SYMBOL_CHARSET
+  77, MAC_CHARSET
+  128, SHIFTJIS_CHARSET
+  129, HANGEUL_CHARSET
+  130, JOHAB_CHARSET
+  134, GB2312_CHARSET
+  136, CHINESEBIG5_CHARSET
+  161, GREEK_CHARSET
+  162, TURKISH_CHARSET
+  163, VIETNAMESE_CHARSET
+  177, HEBREW_CHARSET
+  178, ARABIC_CHARSET
+  186, BALTIC_CHARSET
+  204, RUSSIAN_CHARSET
+  222, THAI_CHARSET
+  238, EASTEUROPE_CHARSET
+
+BodyTextAlignment_Values[4]{value,name}:
+  0, LeftAligned
+  1, CenterAligned
+  2, RightAligned
+  3, MigratedCenter
+
+ParagraphAlignment_Values[4]{value,name}:
+  0, Left
+  1, Center
+  2, Right
+  4, FEDistributed
+
+UnderlineType_Values[3]{value,name}:
+  0, None
+  1, Single
+  2, Double
+
+Deletable_Values[3]{value,name}:
+  0, NotDeletable
+  1, Deletable
+  2, LimitedDeletable
+
+ActionItemType_Values[6]{value,name}:
+  0, Normal
+  1, OutlookTask
+  2, OutlookContact
+  3, OutlookAppointment
+  9, SharedCalendar
+  100, Priority
+
+ActionItemStatus_Values[4]{value,name}:
+  0, NormalCompleted
+  1, NormalNotCompleted
+  2, OutlookCompleted
+  3, OutlookNotCompleted
+
+; =============================================================================
+; 15. COMPLEX TYPES — MS-ONE section 2.2
+; =============================================================================
+
+Color:
+  description: 4-byte ABGR color value
+  fields[4]{name,size,type}:
+    red, 1 byte, uint8
+    green, 1 byte, uint8
+    blue, 1 byte, uint8
+    alpha, 1 byte, uint8 — 0xFF=opaque\, 0x00=automatic/default
+
+COLORREF:
+  description: 4-byte RGB color (Windows COLORREF)
+  fields[4]{name,size,type}:
+    red, 1 byte, uint8
+    green, 1 byte, uint8
+    blue, 1 byte, uint8
+    reserved, 1 byte, uint8 — MUST be zero
+
+FontColor:
+  description: 4-byte font color with auto-detection
+  note: If alpha=0xFF\, color is explicit (RGB). If alpha=0x00\, use automatic color.
+
+WzInAtom:
+  description: UTF-16LE null-terminated string inside prtFourBytesOfLengthFollowedByData
+  encoding: UTF-16LE
+  terminator: 0x0000 (null char)
+
+Time32:
+  description: 4-byte timestamp — minutes since January 1\, 1601 00:00:00 UTC
+  fields[1]{name,size,type}:
+    value, 4 bytes, uint32 — minutes since epoch
+
+; =============================================================================
+; 16. DOCUMENT OBJECT MODEL HIERARCHY — MS-ONE
+; =============================================================================
+
+; --- .one file hierarchy ---
+; SectionObjectSpace (root)
+;   └─ jcidSectionNode (default content root)
+;       ├─ ElementChildNodesOfSection → jcidPageSeriesNode[]
+;       │   └─ jcidPageNode[]
+;       │       ├─ jcidTitleNode (optional)
+;       │       │   └─ jcidOutlineNode (IsTitleText=true)
+;       │       │       └─ jcidOutlineElementNode
+;       │       │           └─ jcidRichTextOENode
+;       │       ├─ ElementChildNodesOfPage → jcidOutlineNode[]
+;       │       │   └─ ElementChildNodesOfOutline → jcidOutlineElementNode[]
+;       │       │       ├─ ContentChildNodesOfOutlineElement → jcidRichTextOENode
+;       │       │       │                                    → jcidImageNode
+;       │       │       │                                    → jcidEmbeddedFileNode
+;       │       │       │                                    → jcidTableNode
+;       │       │       └─ ElementChildNodesOfOutlineElement → jcidOutlineElementNode[] (nested)
+;       │       └─ StructureElementChildNodes → jcidTitleNode
+;       └─ jcidSectionMetaData (metadata root)
+;   └─ jcidPageMetaData (per-page metadata root)
+
+; --- .onetoc2 file hierarchy ---
+; jcidPersistablePropertyContainerForTOC (root)
+;   └─ jcidPersistablePropertyContainerForTOCSection[]
+
+; =============================================================================
+; 17. FSSHTTP TRANSMISSION CONSTANTS (section 2.7)
+; =============================================================================
+
+FSSHTTP_StorageManifest_GUIDs[2]{file_type,guid}:
+  .one, {1F937CB4-B26F-445F-B9F8-17E20160E461}
+  .onetoc2, {E4DBFD38-E5C7-408B-A8A1-0E7B421E1F5F}
+
+FSSHTTP_CellID:
+  header_root_exguid: {{1A5A319C-C26b-41AA-B9C5-9BD8C44E07D4}\, 1}
+  header_cell_exguid1: {{84DEFAB9-AAA3-4A0D-A3A8-520C77AC7073}\, 1}
+  header_cell_exguid2: {{111E4CF3-7FEF-4087-AF6A-B9544ACD334D}\, 1}
+  data_root_exguid: {{84DEFAB9-AAA3-4A0D-A3A8-520C77AC7073}\, 2}
+  revision_root_object_exguid: {{4A3717F8-1C14-49E7-9526-81D942DE1741}\, 1}
+  header_object_exguid: {{B4760B1A-FBDF-4AE3-9D08-53219D8A8D21}\, 1}
+
+FSSHTTP_HeaderProperties[4]{name,property_id,description}:
+  FileIdentityGuid, 0x1C001D94, Header.guidFile
+  FileAncestorIdentityGuid, 0x1C001D95, Header.guidAncestor
+  FileLastCodeVersionThatWroteToIt, 0x14001D99, Header.ffvLastCodeThatWroteToThisFile
+  FileNameCRC, 0x14001D93, Header.crcName
+
+; =============================================================================
+; END OF SPECIFICATION
+; =============================================================================

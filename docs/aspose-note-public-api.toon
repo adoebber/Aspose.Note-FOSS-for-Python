@@ -1,0 +1,425 @@
+; Aspose.Note for Python - public API logic specification
+; Source of truth: src/aspose/note/model.py, src/aspose/note/enums.py, src/aspose/note/exceptions.py
+; Scope: public members defined in these files only
+
+api:
+  package: aspose.note
+  language: python
+  source_files[3]: src/aspose/note/model.py,src/aspose/note/enums.py,src/aspose/note/exceptions.py
+  generated_from_date: 2026-03-04
+  guarantees:
+    compatibility_goal: mirrors Aspose.Note .NET public shape where practical
+    implementation_state: partial compatibility layer over internal OneNote parser/exporter
+
+enums:
+  SaveFormat:
+    type: enum.Enum
+    members[8]{name,value,logic}:
+      One,one,default when save format/options not passed to Document.Save
+      Pdf,pdf,only format implemented in Document.Save
+      Html,html,declared for compatibility but not implemented by Document.Save
+      Jpeg,jpeg,declared for compatibility but not implemented by Document.Save
+      Png,png,declared for compatibility but not implemented by Document.Save
+      Gif,gif,declared for compatibility but not implemented by Document.Save
+      Bmp,bmp,declared for compatibility but not implemented by Document.Save
+      Tiff,tiff,declared for compatibility but not implemented by Document.Save
+
+  FileFormat:
+    type: enum.Enum
+    members[3]{name,value,logic}:
+      OneNote2010,onenote2010,returned unconditionally by Document.FileFormat property
+      OneNoteOnline,onenoteonline,reserved compatibility value
+      OneNote2007,onenote2007,reserved compatibility value
+
+  HorizontalAlignment:
+    type: enum.Enum
+    members[3]{name,value,logic}:
+      Left,left,compatibility enum value
+      Center,center,compatibility enum value
+      Right,right,compatibility enum value
+
+  NodeType:
+    type: enum.Enum
+    members[8]{name,value,logic}:
+      Document,document,compatibility enum value
+      Page,page,compatibility enum value
+      Outline,outline,compatibility enum value
+      OutlineElement,outline_element,compatibility enum value
+      RichText,rich_text,compatibility enum value
+      Image,image,compatibility enum value
+      Table,table,compatibility enum value
+      AttachedFile,attached_file,compatibility enum value
+
+exceptions:
+  AsposeNoteError:
+    base: Exception
+    logic: common base for all library-defined exceptions in this module
+
+  FileCorruptedException:
+    base: AsposeNoteError
+    logic: typed marker exception, no custom state or behavior
+
+  IncorrectDocumentStructureException:
+    base: AsposeNoteError
+    logic: typed marker exception, no custom state or behavior
+
+  IncorrectPasswordException:
+    base: AsposeNoteError
+    logic: raised by Document.__init__ when LoadOptions.DocumentPassword is provided
+
+  UnsupportedFileFormatException:
+    base: AsposeNoteError
+    constructor:
+      signature: __init__(message:str='Unsupported file format', file_format:str|None=None)
+      logic[2]:
+        passes message to base Exception
+        stores provided file_format into attribute FileFormat
+    members:
+      FileFormat:
+        type: str|None
+        logic: optional format identifier associated with the failure
+
+  UnsupportedSaveFormatException:
+    base: AsposeNoteError
+    logic: raised by Document.Save for unsupported format/options combinations
+
+model:
+  type_aliases:
+    TNode:
+      value: TypeVar('TNode', bound='Node')
+      logic: preserves concrete child type in composite insertion APIs
+
+  classes:
+    DocumentVisitor:
+      base: object
+      pattern: visitor callbacks for DOM traversal
+      methods[14]{name,signature,logic}:
+        VisitDocumentStart,(document:Document)->None,no-op default implementation
+        VisitDocumentEnd,(document:Document)->None,no-op default implementation
+        VisitPageStart,(page:Page)->None,no-op default implementation
+        VisitPageEnd,(page:Page)->None,no-op default implementation
+        VisitTitleStart,(title:Title)->None,no-op default implementation
+        VisitTitleEnd,(title:Title)->None,no-op default implementation
+        VisitOutlineStart,(outline:Outline)->None,no-op default implementation
+        VisitOutlineEnd,(outline:Outline)->None,no-op default implementation
+        VisitOutlineElementStart,(outline_element:OutlineElement)->None,no-op default implementation
+        VisitOutlineElementEnd,(outline_element:OutlineElement)->None,no-op default implementation
+        VisitRichTextStart,(rich_text:RichText)->None,no-op default implementation
+        VisitRichTextEnd,(rich_text:RichText)->None,no-op default implementation
+        VisitImageStart,(image:Image)->None,no-op default implementation
+        VisitImageEnd,(image:Image)->None,no-op default implementation
+
+    License:
+      base: object
+      purpose: compatibility stub
+      methods:
+        SetLicense:
+          signature: (license_path_or_stream:Any) -> None
+          logic: accepts argument but performs no operation
+
+    Metered:
+      base: object
+      purpose: compatibility stub
+      methods:
+        SetMeteredKey:
+          signature: (public_key:str, private_key:str) -> None
+          logic: accepts keys but performs no operation
+
+    LoadOptions:
+      kind: dataclass
+      base: object
+      members:
+        DocumentPassword:
+          type: str|None
+          default: null
+          logic: if non-empty, Document.__init__ raises IncorrectPasswordException
+        LoadHistory:
+          type: bool
+          default: false
+          logic: stored only; current Document loader does not use this flag
+
+    Node:
+      kind: dataclass
+      base: object
+      members:
+        ParentNode:
+          type: Node|None
+          default: null
+          logic: maintained by CompositeNode insertion/removal methods
+      properties:
+        Document:
+          type: Document|None
+          logic[2]:
+            walks ParentNode chain upward until Document instance
+            returns null if node is detached from a Document tree
+      methods:
+        Accept:
+          signature: (visitor:DocumentVisitor) -> None
+          logic: delegates to protected _accept; leaf Node default traversal is no-op
+
+    CompositeNode:
+      kind: dataclass
+      base: Node
+      internal_members:
+        _children:
+          type: list[Node]
+          default: empty list
+          logic: ordered child storage used by traversal and collection APIs
+      properties:
+        FirstChild:
+          type: Node|None
+          logic: returns first child or null when list is empty
+        LastChild:
+          type: Node|None
+          logic: returns last child or null when list is empty
+      methods:
+        AppendChildLast:
+          signature: (node:TNode) -> TNode
+          logic[2]:
+            sets node.ParentNode to self
+            appends node to end of _children and returns same node
+        AppendChildFirst:
+          signature: (node:TNode) -> TNode
+          logic[2]:
+            sets node.ParentNode to self
+            inserts node at index 0 and returns same node
+        InsertChild:
+          signature: (index:int, node:TNode) -> TNode
+          logic[2]:
+            sets node.ParentNode to self
+            inserts at requested index using list semantics and returns node
+        RemoveChild:
+          signature: (node:Node) -> None
+          logic[2]:
+            removes node from _children using list.remove (raises ValueError if absent)
+            sets removed node.ParentNode to null
+        GetEnumerator:
+          signature: () -> Iterator[Node]
+          logic: returns iterator over _children
+        __iter__:
+          signature: () -> Iterator[Node]
+          logic: returns iterator over _children to support for-in iteration
+        GetChildNodes:
+          signature: (node_type:type[TNode]) -> list[TNode]
+          logic[3]:
+            performs depth-first recursive walk starting from self
+            collects nodes that satisfy isinstance(node, node_type)
+            includes self in results when self matches requested type
+
+    NoteTag:
+      kind: dataclass
+      base: Node
+      members[6]{name,type,default,logic}:
+        shape,int|None,null,raw parser value
+        label,str|None,null,human-readable tag label
+        text_color,int|None,null,raw color value
+        highlight_color,int|None,null,raw color value
+        created,int|None,null,raw timestamp/integer metadata
+        completed,int|None,null,raw timestamp/integer metadata
+      methods:
+        CreateYellowStar:
+          signature: () -> NoteTag
+          type: staticmethod
+          logic: returns new NoteTag(shape=None,label='Yellow Star')
+
+    TextStyle:
+      kind: dataclass
+      base: Node
+      members[13]{name,type,default,logic}:
+        IsHyperlink,bool,false,boolean shortcut for hyperlink presence
+        HyperlinkAddress,str|None,null,hyperlink URL
+        FontName,str|None,null,font family name
+        FontSize,float|None,null,font size in points
+        FontColor,int|None,null,raw color value
+        HighlightColor,int|None,null,raw color value
+        LanguageId,int|None,null,language identifier
+        Bold,bool,false,style flag
+        Italic,bool,false,style flag
+        Underline,bool,false,style flag
+        Strikethrough,bool,false,style flag
+        Superscript,bool,false,style flag
+        Subscript,bool,false,style flag
+
+    TextRun:
+      kind: dataclass
+      base: Node
+      members:
+        Text: {type:str,default:'',logic:text slice belonging to this run}
+        Style: {type:TextStyle,default:TextStyle(),logic:run-level style object}
+        Start: {type:int|None,default:null,logic:inclusive start offset in parent RichText.Text}
+        End: {type:int|None,default:null,logic:exclusive end offset in parent RichText.Text}
+
+    RichText:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        Text: {type:str,default:'',logic:plain text content}
+        Runs: {type:list[TextRun],default:[],logic:optional style segmentation metadata}
+        FontSize: {type:float|None,default:null,logic:fallback font size}
+        Tags: {type:list[NoteTag],default:[],logic:tag metadata associated with text}
+      methods:
+        Append:
+          signature: (text:str, style:TextStyle|None=None) -> RichText
+          logic[3]:
+            appends text argument to Text string
+            if style is provided then appends TextRun(Text=text,Style=style) to Runs
+            returns self for fluent chaining
+        Replace:
+          signature: (old_value:str, new_value:str) -> None
+          logic: applies Python str.replace to Text (global replacement)
+
+    Title:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        TitleText: {type:RichText|None,default:null,logic:main page title text node reference}
+        TitleDate: {type:RichText|None,default:null,logic:optional title date rich text reference}
+        TitleTime: {type:RichText|None,default:null,logic:optional title time rich text reference}
+
+    OutlineElement:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        Tags: {type:list[NoteTag],default:[],logic:tags attached to outline element}
+        IndentLevel: {type:int,default:0,logic:nesting level in list/outline}
+        NumberList: {type:NumberList|None,default:null,logic:numbering metadata when parsed}
+
+    Outline:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        X: {type:float|None,default:null,logic:horizontal position}
+        Y: {type:float|None,default:null,logic:vertical position}
+        Width: {type:float|None,default:null,logic:render width}
+
+    Image:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        FileName: {type:str|None,default:null,logic:original file name when available}
+        Bytes: {type:bytes,default:b'',logic:binary image payload}
+        Width: {type:float|None,default:null,logic:image width}
+        Height: {type:float|None,default:null,logic:image height}
+        AlternativeTextTitle: {type:str|None,default:null,logic:alternate title text}
+        AlternativeTextDescription: {type:str|None,default:null,logic:alternate description text}
+        HyperlinkUrl: {type:str|None,default:null,logic:associated hyperlink}
+        Tags: {type:list[NoteTag],default:[],logic:tags attached to image}
+      methods:
+        Replace:
+          signature: (image:Image) -> None
+          logic[2]:
+            copies Bytes from source image
+            copies FileName from source image
+
+    AttachedFile:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        FileName: {type:str|None,default:null,logic:attached file name}
+        Bytes: {type:bytes,default:b'',logic:attached file payload}
+        Tags: {type:list[NoteTag],default:[],logic:tags attached to file}
+
+    NumberList:
+      kind: dataclass
+      base: Node
+      purpose: compatibility container for parsed list metadata
+      members:
+        Format: {type:str|None,default:null,logic:list formatting token from parser}
+        Restart: {type:int|None,default:null,logic:restart index for numbering}
+        IsNumbered: {type:bool,default:false,logic:true for numbered list semantics}
+
+    TableCell:
+      kind: dataclass
+      base: CompositeNode
+      logic: structural container without extra public members
+
+    TableRow:
+      kind: dataclass
+      base: CompositeNode
+      logic: structural container without extra public members
+
+    Table:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        Tags: {type:list[NoteTag],default:[],logic:tags attached to table}
+        ColumnWidths: {type:list[float],default:[],logic:parsed column width metadata}
+        BordersVisible: {type:bool,default:true,logic:table border visibility flag}
+
+    Page:
+      kind: dataclass
+      base: CompositeNode
+      members:
+        Title: {type:Title|None,default:null,logic:page title object reference}
+        Author: {type:str|None,default:null,logic:page author}
+        CreationTime: {type:datetime|None,default:null,logic:page creation timestamp}
+        LastModifiedTime: {type:datetime|None,default:null,logic:page modification timestamp}
+        Level: {type:int|None,default:null,logic:page hierarchy level}
+      methods:
+        Clone:
+          signature: (deep:bool=False) -> Page
+          logic[4]:
+            creates new Page with same scalar metadata and same Title reference
+            when deep is false children are not copied
+            when deep is true existing child object references are appended to clone
+            deep clone is shallow by object identity (children are not duplicated)
+
+    Document:
+      kind: dataclass_like
+      base: CompositeNode
+      constructor:
+        signature: __init__(source:str|Path|BinaryIO|None=None, load_options:LoadOptions|None=None)
+        logic[8]:
+          initializes DisplayName and CreationTime to null, _onenote_doc to null
+          if source is null returns empty Document
+          if load_options.DocumentPassword is provided raises IncorrectPasswordException
+          imports internal onenote parser lazily
+          loads parser document by path (onenote.Document.open) for str/Path source
+          loads parser document by stream (onenote.Document.from_stream) otherwise
+          stores parser document in _onenote_doc and display_name in DisplayName
+          converts each parsed page and appends to children
+      members:
+        DisplayName:
+          type: str|None
+          default: null
+          logic: populated from underlying parser document when loaded from source
+        CreationTime:
+          type: datetime|None
+          default: null
+          logic: currently not assigned in constructor
+      internal_members:
+        _onenote_doc:
+          type: Any|None
+          logic: backing internal document used for export operations
+      properties:
+        FileFormat:
+          type: FileFormat
+          logic: always returns FileFormat.OneNote2010
+      methods:
+        Count:
+          signature: () -> int
+          logic: returns len(_children)
+        DetectLayoutChanges:
+          signature: () -> None
+          logic: no-op compatibility method
+        GetPageHistory:
+          signature: (page:Page) -> list[Page]
+          logic: returns single-item list containing provided page
+        Save:
+          signature: (target:str|Path|BinaryIO, format_or_options:Any=None) -> None
+          format_resolution_logic[4]:
+            if format_or_options is SaveFormat then use it directly
+            if format_or_options is null then use SaveFormat.One
+            if format_or_options is SaveOptions then derive format from opts.SaveFormat
+            otherwise raise UnsupportedSaveFormatException('Unsupported format/options argument')
+          execution_logic:
+            pdf_branch:
+              condition: resolved format equals SaveFormat.Pdf
+              steps[4]:
+                if _onenote_doc is null raise UnsupportedSaveFormatException('Cannot export empty Document to PDF')
+                if options is PdfSaveOptions map TagIconDir/TagIconSize/TagIconGap to internal PdfExportOptions
+                call _onenote_doc.export_pdf(target, options=pdf_opts) when PdfSaveOptions provided
+                call _onenote_doc.export_pdf(target) otherwise
+            non_pdf_branch:
+              condition: resolved format is not SaveFormat.Pdf
+              behavior: raise UnsupportedSaveFormatException("SaveFormat '{fmt.name}' is not supported in this Python implementation")
