@@ -22,8 +22,14 @@ _RIGHT_MARGIN = 40
 _DEFAULT_PAGE_MARGIN_POINTS = 36.0
 _POINTS_PER_HALF_INCH = 36.0
 _POINTS_PER_IMAGE_CM = 28.35
+_DEFAULT_TAG_ICON_SIZE = 10.0
+_DEFAULT_TAG_ICON_GAP = 2.0
+_OUTLINE_LEVEL_INDENT = 18.0
+_OUTLINE_MARKER_GAP = 6.0
+_OUTLINE_MARKER_MIN_WIDTH = 12.0
 _WINDOWS_FONT_DIR = Path("C:/Windows/Fonts")
 _SYSTEM_FONT_ENV_VAR = "ASPOSE_NOTE_PDF_USE_SYSTEM_FONTS"
+_TAG_ICON_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".bmp")
 _DEFAULT_HYPERLINK_COLOR = (0.0, 0.2, 0.65)
 _COMMON_FONT_DIRS = (
     _WINDOWS_FONT_DIR,
@@ -96,6 +102,45 @@ _BASE14_FONTS = {
     },
 }
 _REGISTERED_FONT_NAMES: dict[tuple[str, bool, bool, bool], str] = {}
+
+_CHECKBOX_SHAPES = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 28, 30, 32, 48, 50, 52, 69, 71, 73, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99}
+_STAR_SHAPES = {4, 5, 6, 13, 34, 40, 54, 61, 75}
+_FLAG_SHAPES = {14, 89, 90, 91, 92, 93, 97, 98, 99}
+_QUESTION_SHAPES = {15, 111}
+_ARROW_RIGHT_SHAPES = {10, 11, 12, 16, 59, 80}
+_ARROW_LEFT_SHAPES = {38, 58, 79}
+_ARROW_UP_SHAPES = {45, 66, 86}
+_ARROW_DOWN_SHAPES = {37, 57, 78}
+_EXCLAMATION_SHAPES = {7, 8, 9, 17, 115}
+_CONTACT_SHAPES = {18, 94, 95, 96, 114, 115, 116, 118}
+_MUSIC_SHAPES = {121}
+_CALENDAR_SHAPES = {19, 120, 133, 139}
+_TIME_SHAPES = {20, 110, 117}
+_LIGHT_SHAPES = {21, 140}
+_PIN_SHAPES = {22}
+_HOME_SHAPES = {23}
+_COMMENT_SHAPES = {24, 111, 123}
+_SMILE_SHAPES = {25}
+_RIBBON_SHAPES = {26}
+_KEY_SHAPES = {27}
+_CHECKMARK_SHAPES = {35, 55, 76}
+_MAIL_SHAPES = {106, 107, 108}
+_PHONE_SHAPES = {109, 110}
+_ATTACHMENT_SHAPES = {112}
+_FROWN_SHAPES = {113}
+_GLOBE_SHAPES = {124, 125}
+_LAPTOP_SHAPES = {126}
+_PLANE_SHAPES = {127}
+_CAR_SHAPES = {128}
+_BINOCULARS_SHAPES = {129}
+_PRESENTATION_SHAPES = {130}
+_LOCK_SHAPES = {131}
+_BOOK_SHAPES = {132, 134, 135}
+_PEN_SHAPES = {136}
+_DOLLAR_SHAPES = {137, 138}
+_CLOUD_SHAPES = {141}
+_HEART_SHAPES = {142}
+_SUN_SHAPES = {41, 62, 82, 143}
 
 
 def _sanitize_text(text: str) -> str:
@@ -398,11 +443,12 @@ def _render_runs(pdf, runs, start_x: float, cursor_y: float, page_width: float, 
     return x, cursor_y
 
 
-def _render_rich_text(pdf, rich_text, cursor_y: float, page_width: float, page_height: float, start_x: float = _LEFT_MARGIN, default_font: str = "Arial", default_size: float = 11.0, default_bold: bool = False) -> float:
+def _render_rich_text(pdf, rich_text, cursor_y: float, page_width: float, page_height: float, start_x: float = _LEFT_MARGIN, default_font: str = "Arial", default_size: float = 11.0, default_bold: bool = False, options: PdfSaveOptions | None = None) -> float:
     runs = _iter_runs(rich_text)
     if not runs:
         return cursor_y
-    _, cursor_y = _render_runs(pdf, runs, start_x, cursor_y, page_width, page_height, default_font=default_font, default_size=default_size, default_bold=default_bold)
+    tag_offset = _render_note_tags(pdf, _tags_for_node(rich_text), start_x, cursor_y, options)
+    _, cursor_y = _render_runs(pdf, runs, start_x + tag_offset, cursor_y, page_width, page_height, default_font=default_font, default_size=default_size, default_bold=default_bold)
     return cursor_y
 
 
@@ -418,6 +464,590 @@ def _render_inline_rich_texts(pdf, rich_texts, cursor_y: float, page_width: floa
         rendered = True
     if rendered:
         cursor_y -= default_size * 1.6
+    return cursor_y
+
+
+def _normalize_tag_icon_size(options: PdfSaveOptions | None) -> float:
+    raw_size = getattr(options, "TagIconSize", None) if options is not None else None
+    if raw_size is None:
+        return _DEFAULT_TAG_ICON_SIZE
+    try:
+        return max(float(raw_size), 6.0)
+    except (TypeError, ValueError):
+        return _DEFAULT_TAG_ICON_SIZE
+
+
+def _normalize_tag_icon_gap(options: PdfSaveOptions | None) -> float:
+    raw_gap = getattr(options, "TagIconGap", None) if options is not None else None
+    if raw_gap is None:
+        return _DEFAULT_TAG_ICON_GAP
+    try:
+        return max(float(raw_gap), 0.0)
+    except (TypeError, ValueError):
+        return _DEFAULT_TAG_ICON_GAP
+
+
+def _normalize_tag_component(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value).strip()
+    compact = compact.replace("/", "-").replace("\\", "-").replace(":", "-")
+    return compact
+
+
+def _slugify_tag_component(value: str) -> str:
+    compact = _normalize_tag_component(value).lower()
+    compact = re.sub(r"\s+", "-", compact)
+    compact = re.sub(r"[^\w\-.]+", "", compact, flags=re.UNICODE)
+    return compact.strip("-._")
+
+
+def _tag_color(shape: int | None) -> tuple[float, float, float]:
+    if shape in _QUESTION_SHAPES:
+        return (0.64, 0.32, 0.82)
+    if shape in {1, 4, 7, 10, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 96, 99, 103}:
+        return (0.20, 0.58, 0.25)
+    if shape in {3, 6, 9, 12, 14, 16, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 94, 97, 102, 118, 121, 124, 125, 126, 133}:
+        return (0.13, 0.43, 0.82)
+    if shape in {17, 98, 100, 113, 119, 137, 138, 140, 142}:
+        return (0.85, 0.18, 0.16)
+    return (0.92, 0.55, 0.18)
+
+
+def _tag_symbol(tag) -> tuple[str, bool]:
+    shape = getattr(tag, "shape", None)
+    label = getattr(tag, "label", None) or ""
+    if shape in _STAR_SHAPES:
+        return "★", False
+    if shape in _QUESTION_SHAPES:
+        return "?", False
+    if shape in _EXCLAMATION_SHAPES:
+        return "!", False
+    if shape in _ARROW_RIGHT_SHAPES:
+        return "→", False
+    if shape in _ARROW_LEFT_SHAPES:
+        return "←", False
+    if shape in _ARROW_UP_SHAPES:
+        return "↑", False
+    if shape in _ARROW_DOWN_SHAPES:
+        return "↓", False
+    if shape in _FLAG_SHAPES:
+        return "⚑", False
+    if shape in _CHECKMARK_SHAPES:
+        return "✓", False
+    if shape in _MUSIC_SHAPES:
+        return "♪", False
+    if shape in _CHECKBOX_SHAPES:
+        if shape in {4, 5, 6}:
+            return "★", False
+        if shape in {7, 8, 9}:
+            return "!", False
+        if shape in {10, 11, 12}:
+            return "→", False
+        if shape in {89, 90, 91, 92, 93, 97, 98, 99}:
+            return "⚑", False
+        if shape in {94, 95, 96}:
+            return "P", True
+        return "✓", False
+    if shape in _CONTACT_SHAPES:
+        return "P", True
+    if shape in _CALENDAR_SHAPES:
+        return "D", True
+    if shape in _TIME_SHAPES:
+        return "T", True
+    if shape in _LIGHT_SHAPES:
+        return "L", True
+    if shape in _PIN_SHAPES:
+        return "P", True
+    if shape in _HOME_SHAPES:
+        return "H", True
+    if shape in _COMMENT_SHAPES:
+        return "C", True
+    if shape in _SMILE_SHAPES:
+        return ":)", True
+    if shape in _FROWN_SHAPES:
+        return ":(", True
+    if shape in _RIBBON_SHAPES:
+        return "R", True
+    if shape in _KEY_SHAPES:
+        return "K", True
+    if shape in _MAIL_SHAPES:
+        return "M", True
+    if shape in _PHONE_SHAPES:
+        return "P", True
+    if shape in _ATTACHMENT_SHAPES:
+        return "A", True
+    if shape in _GLOBE_SHAPES:
+        return "G", True
+    if shape in _LAPTOP_SHAPES:
+        return "PC", True
+    if shape in _PLANE_SHAPES:
+        return "PL", True
+    if shape in _CAR_SHAPES:
+        return "C", True
+    if shape in _BINOCULARS_SHAPES:
+        return "B", True
+    if shape in _PRESENTATION_SHAPES:
+        return "PR", True
+    if shape in _LOCK_SHAPES:
+        return "L", True
+    if shape in _BOOK_SHAPES:
+        return "BK", True
+    if shape in _PEN_SHAPES:
+        return "P", True
+    if shape in _DOLLAR_SHAPES:
+        return "$", True
+    if shape in _CLOUD_SHAPES:
+        return "CL", True
+    if shape in _HEART_SHAPES:
+        return "H", True
+    if shape in _SUN_SHAPES:
+        return "S", True
+    compact_label = _normalize_tag_component(label)
+    if compact_label:
+        return compact_label[:2], True
+    return (str(shape)[:2] if shape is not None else "T"), True
+
+
+def _tag_icon_candidates(tag) -> list[str]:
+    shape = getattr(tag, "shape", None)
+    label = getattr(tag, "label", None) or ""
+    symbol, _ = _tag_symbol(tag)
+    candidates: list[str] = []
+    if shape is not None:
+        candidates.extend([str(shape), f"shape-{shape}"])
+    compact_label = _normalize_tag_component(label)
+    if compact_label:
+        candidates.append(compact_label)
+        slug = _slugify_tag_component(compact_label)
+        if slug and slug != compact_label:
+            candidates.append(slug)
+    slug_symbol = _slugify_tag_component(symbol)
+    if slug_symbol:
+        candidates.append(slug_symbol)
+    seen: set[str] = set()
+    result: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            result.append(candidate)
+    return result
+
+
+def _find_tag_icon_path(tag, options: PdfSaveOptions | None) -> Path | None:
+    icon_dir = getattr(options, "TagIconDir", None) if options is not None else None
+    if not icon_dir:
+        return None
+    base_dir = Path(icon_dir)
+    if not base_dir.exists() or not base_dir.is_dir():
+        return None
+    for candidate in _tag_icon_candidates(tag):
+        for suffix in _TAG_ICON_EXTENSIONS:
+            path = base_dir / f"{candidate}{suffix}"
+            if path.exists():
+                return path
+    return None
+
+
+def _draw_tag_line(pdf, x1: float, y1: float, x2: float, y2: float) -> None:
+    if hasattr(pdf, "line"):
+        pdf.line(x1, y1, x2, y2)
+
+
+def _draw_tag_rect(pdf, x: float, y: float, width: float, height: float, fill: bool = False) -> None:
+    if hasattr(pdf, "rect"):
+        pdf.rect(x, y, width, height, stroke=1, fill=1 if fill else 0)
+
+
+def _draw_checkmark_icon(pdf, x: float, y: float, size: float) -> None:
+    _draw_tag_line(pdf, x + (size * 0.18), y + (size * 0.35), x + (size * 0.40), y + (size * 0.12))
+    _draw_tag_line(pdf, x + (size * 0.40), y + (size * 0.12), x + (size * 0.78), y + (size * 0.72))
+
+
+def _draw_star_icon(pdf, x: float, y: float, size: float) -> None:
+    points = [
+        (0.50, 0.84),
+        (0.62, 0.56),
+        (0.90, 0.56),
+        (0.68, 0.38),
+        (0.76, 0.10),
+        (0.50, 0.26),
+        (0.24, 0.10),
+        (0.32, 0.38),
+        (0.10, 0.56),
+        (0.38, 0.56),
+    ]
+    scaled = [(x + (px * size), y + (py * size)) for px, py in points]
+    if hasattr(pdf, "beginPath") and hasattr(pdf, "drawPath"):
+        path = pdf.beginPath()
+        first_x, first_y = scaled[0]
+        path.moveTo(first_x, first_y)
+        for point_x, point_y in scaled[1:]:
+            path.lineTo(point_x, point_y)
+        path.close()
+        pdf.drawPath(path, stroke=0, fill=1)
+        return
+    for index in range(len(scaled)):
+        x1, y1 = scaled[index]
+        x2, y2 = scaled[(index + 1) % len(scaled)]
+        _draw_tag_line(pdf, x1, y1, x2, y2)
+
+
+def _draw_arrow_icon(pdf, x: float, y: float, size: float, direction: str) -> None:
+    if direction == "left":
+        _draw_tag_line(pdf, x + (size * 0.78), y + (size * 0.48), x + (size * 0.22), y + (size * 0.48))
+        _draw_tag_line(pdf, x + (size * 0.22), y + (size * 0.48), x + (size * 0.44), y + (size * 0.70))
+        _draw_tag_line(pdf, x + (size * 0.22), y + (size * 0.48), x + (size * 0.44), y + (size * 0.26))
+        return
+    if direction == "up":
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.18), x + (size * 0.50), y + (size * 0.76))
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.18), x + (size * 0.28), y + (size * 0.40))
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.18), x + (size * 0.72), y + (size * 0.40))
+        return
+    if direction == "down":
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.18), x + (size * 0.50), y + (size * 0.76))
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.76), x + (size * 0.28), y + (size * 0.54))
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.76), x + (size * 0.72), y + (size * 0.54))
+        return
+    _draw_tag_line(pdf, x + (size * 0.18), y + (size * 0.48), x + (size * 0.78), y + (size * 0.48))
+    _draw_tag_line(pdf, x + (size * 0.78), y + (size * 0.48), x + (size * 0.56), y + (size * 0.70))
+    _draw_tag_line(pdf, x + (size * 0.78), y + (size * 0.48), x + (size * 0.56), y + (size * 0.26))
+
+
+def _draw_question_icon(pdf, x: float, y: float, size: float) -> None:
+    _draw_tag_line(pdf, x + (size * 0.26), y + (size * 0.66), x + (size * 0.40), y + (size * 0.82))
+    _draw_tag_line(pdf, x + (size * 0.40), y + (size * 0.82), x + (size * 0.62), y + (size * 0.82))
+    _draw_tag_line(pdf, x + (size * 0.62), y + (size * 0.82), x + (size * 0.74), y + (size * 0.64))
+    _draw_tag_line(pdf, x + (size * 0.74), y + (size * 0.64), x + (size * 0.50), y + (size * 0.46))
+    _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.46), x + (size * 0.50), y + (size * 0.28))
+    _draw_tag_rect(pdf, x + (size * 0.45), y + (size * 0.08), size * 0.10, size * 0.10, fill=True)
+
+
+def _draw_flag_icon(pdf, x: float, y: float, size: float) -> None:
+    _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.12), x + (size * 0.24), y + (size * 0.82))
+    _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.78), x + (size * 0.72), y + (size * 0.66))
+    _draw_tag_line(pdf, x + (size * 0.72), y + (size * 0.66), x + (size * 0.24), y + (size * 0.52))
+
+
+def _draw_contact_icon(pdf, x: float, y: float, size: float) -> None:
+    if hasattr(pdf, "circle"):
+        pdf.circle(x + (size * 0.50), y + (size * 0.68), size * 0.16, stroke=1, fill=0)
+    else:
+        _draw_tag_rect(pdf, x + (size * 0.40), y + (size * 0.58), size * 0.20, size * 0.20)
+    _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.26), x + (size * 0.76), y + (size * 0.26))
+    _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.26), x + (size * 0.36), y + (size * 0.44))
+    _draw_tag_line(pdf, x + (size * 0.76), y + (size * 0.26), x + (size * 0.64), y + (size * 0.44))
+
+
+def _draw_music_icon(pdf, x: float, y: float, size: float) -> None:
+    _draw_tag_line(pdf, x + (size * 0.58), y + (size * 0.78), x + (size * 0.58), y + (size * 0.30))
+    _draw_tag_line(pdf, x + (size * 0.58), y + (size * 0.78), x + (size * 0.80), y + (size * 0.72))
+    _draw_tag_rect(pdf, x + (size * 0.22), y + (size * 0.10), size * 0.18, size * 0.16, fill=False)
+    _draw_tag_rect(pdf, x + (size * 0.52), y + (size * 0.16), size * 0.18, size * 0.16, fill=False)
+
+
+def _draw_calendar_icon(pdf, x: float, y: float, size: float) -> None:
+    _draw_tag_rect(pdf, x + (size * 0.14), y + (size * 0.14), size * 0.72, size * 0.66)
+    _draw_tag_line(pdf, x + (size * 0.14), y + (size * 0.62), x + (size * 0.86), y + (size * 0.62))
+    _draw_tag_line(pdf, x + (size * 0.30), y + (size * 0.86), x + (size * 0.30), y + (size * 0.68))
+    _draw_tag_line(pdf, x + (size * 0.70), y + (size * 0.86), x + (size * 0.70), y + (size * 0.68))
+
+
+def _draw_clock_icon(pdf, x: float, y: float, size: float) -> None:
+    if hasattr(pdf, "circle"):
+        pdf.circle(x + (size * 0.50), y + (size * 0.50), size * 0.34, stroke=1, fill=0)
+    else:
+        _draw_tag_rect(pdf, x + (size * 0.18), y + (size * 0.18), size * 0.64, size * 0.64)
+    _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.50), x + (size * 0.50), y + (size * 0.66))
+    _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.50), x + (size * 0.64), y + (size * 0.40))
+
+
+def _draw_generic_badge(pdf, x: float, y: float, size: float, shape: int | None) -> None:
+    _draw_tag_rect(pdf, x + (size * 0.12), y + (size * 0.12), size * 0.76, size * 0.76)
+    if shape is not None and shape % 3 == 0:
+        _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.24), x + (size * 0.76), y + (size * 0.76))
+    elif shape is not None and shape % 3 == 1:
+        _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.50), x + (size * 0.76), y + (size * 0.50))
+        _draw_tag_line(pdf, x + (size * 0.50), y + (size * 0.24), x + (size * 0.50), y + (size * 0.76))
+    else:
+        _draw_tag_line(pdf, x + (size * 0.24), y + (size * 0.76), x + (size * 0.76), y + (size * 0.24))
+
+
+def _draw_tag_glyph(pdf, x: float, baseline_y: float, shape: int | None, color: tuple[float, float, float], icon_size: float) -> float:
+    glyph_y = baseline_y - (icon_size * 0.08)
+    _set_stroke_color(pdf, color)
+    _set_fill_color(pdf, color)
+    if shape in _CHECKBOX_SHAPES:
+        _draw_tag_rect(pdf, x, glyph_y - (icon_size * 0.10), icon_size, icon_size)
+        inner_x = x + (icon_size * 0.08)
+        inner_y = glyph_y
+        inner_size = icon_size * 0.84
+        if shape in {4, 5, 6}:
+            _draw_star_icon(pdf, inner_x, inner_y, inner_size)
+        elif shape in {7, 8, 9}:
+            _draw_question_icon(pdf, inner_x, inner_y, inner_size)
+        elif shape in {10, 11, 12}:
+            _draw_arrow_icon(pdf, inner_x, inner_y, inner_size, "right")
+        elif shape in {89, 90, 91, 92, 93, 97, 98, 99}:
+            _draw_flag_icon(pdf, inner_x, inner_y, inner_size)
+        elif shape in {94, 95, 96}:
+            _draw_contact_icon(pdf, inner_x, inner_y, inner_size)
+        else:
+            _draw_checkmark_icon(pdf, inner_x, inner_y, inner_size)
+        return icon_size
+    if shape in _STAR_SHAPES:
+        _draw_star_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _QUESTION_SHAPES:
+        _draw_question_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _EXCLAMATION_SHAPES:
+        _draw_tag_line(pdf, x + (icon_size * 0.50), glyph_y + (icon_size * 0.22), x + (icon_size * 0.50), glyph_y + (icon_size * 0.78))
+        _draw_tag_rect(pdf, x + (icon_size * 0.45), glyph_y + (icon_size * 0.06), icon_size * 0.10, icon_size * 0.10, fill=True)
+        return icon_size
+    if shape in _ARROW_RIGHT_SHAPES:
+        _draw_arrow_icon(pdf, x, glyph_y, icon_size, "right")
+        return icon_size
+    if shape in _ARROW_LEFT_SHAPES:
+        _draw_arrow_icon(pdf, x, glyph_y, icon_size, "left")
+        return icon_size
+    if shape in _ARROW_UP_SHAPES:
+        _draw_arrow_icon(pdf, x, glyph_y, icon_size, "up")
+        return icon_size
+    if shape in _ARROW_DOWN_SHAPES:
+        _draw_arrow_icon(pdf, x, glyph_y, icon_size, "down")
+        return icon_size
+    if shape in _FLAG_SHAPES:
+        _draw_flag_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _CHECKMARK_SHAPES:
+        _draw_checkmark_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _CONTACT_SHAPES:
+        _draw_contact_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _MUSIC_SHAPES:
+        _draw_music_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _CALENDAR_SHAPES:
+        _draw_calendar_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    if shape in _TIME_SHAPES:
+        _draw_clock_icon(pdf, x, glyph_y, icon_size)
+        return icon_size
+    _draw_generic_badge(pdf, x, glyph_y, icon_size, shape)
+    return icon_size
+
+
+def _render_note_tag(pdf, tag, x: float, baseline_y: float, options: PdfSaveOptions | None) -> float:
+    icon_size = _normalize_tag_icon_size(options)
+    icon_path = _find_tag_icon_path(tag, options)
+    if icon_path is not None:
+        try:
+            from reportlab.lib.utils import ImageReader
+
+            image = ImageReader(str(icon_path))
+            pdf.drawImage(image, x, baseline_y - (icon_size * 0.18), width=icon_size, height=icon_size, preserveAspectRatio=True, mask="auto")
+            return icon_size
+        except Exception:
+            pass
+
+    return _draw_tag_glyph(pdf, x, baseline_y, getattr(tag, "shape", None), _tag_color(getattr(tag, "shape", None)), icon_size)
+
+
+def _dedupe_tags(tags) -> list[object]:
+    seen: set[tuple[object, ...]] = set()
+    result: list[object] = []
+    for tag in tags or []:
+        key = (
+            getattr(tag, "shape", None),
+            getattr(tag, "label", None),
+            getattr(tag, "text_color", None),
+            getattr(tag, "highlight_color", None),
+            getattr(tag, "created", None),
+            getattr(tag, "completed", None),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(tag)
+    return result
+
+
+def _tag_block_width(pdf, tags, options: PdfSaveOptions | None) -> float:
+    deduped = _dedupe_tags(tags)
+    if not deduped:
+        return 0.0
+    gap = _normalize_tag_icon_gap(options)
+    icon_size = _normalize_tag_icon_size(options)
+    return (len(deduped) * icon_size) + (len(deduped) * gap)
+
+
+def _render_note_tags(pdf, tags, x: float, baseline_y: float, options: PdfSaveOptions | None) -> float:
+    deduped = _dedupe_tags(tags)
+    if not deduped:
+        return 0.0
+    gap = _normalize_tag_icon_gap(options)
+    consumed = 0.0
+    for tag in reversed(deduped):
+        consumed += _render_note_tag(pdf, tag, x + consumed, baseline_y, options)
+        consumed += gap
+    return consumed
+
+
+def _tags_for_node(node):
+    return _dedupe_tags(getattr(node, "Tags", None) or [])
+
+
+def _number_list_payload(fmt: str | None) -> str:
+    if not fmt:
+        return ""
+    if len(fmt) > 1 and ord(fmt[0]) == len(fmt) - 1:
+        return fmt[1:]
+    return fmt
+
+
+def _to_roman(value: int) -> str:
+    if value <= 0:
+        return str(value)
+    numerals = (
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    )
+    remaining = value
+    result: list[str] = []
+    for amount, numeral in numerals:
+        while remaining >= amount:
+            result.append(numeral)
+            remaining -= amount
+    return "".join(result)
+
+
+def _to_alpha(value: int) -> str:
+    if value <= 0:
+        return str(value)
+    current = value
+    chars: list[str] = []
+    while current > 0:
+        current -= 1
+        chars.append(chr(ord("a") + (current % 26)))
+        current //= 26
+    return "".join(reversed(chars))
+
+
+def _format_list_number(value: int, number_format: int) -> str:
+    if number_format == 4:
+        return _to_alpha(value)
+    if number_format == 3:
+        return _to_alpha(value).upper()
+    if number_format == 2:
+        return _to_roman(value).lower()
+    if number_format == 1:
+        return _to_roman(value)
+    return str(value)
+
+
+def _resolve_list_marker_text(number_list, depth: int, list_state: dict[tuple[int, str], int]) -> str:
+    fmt = getattr(number_list, "Format", None)
+    payload = _number_list_payload(fmt)
+    if not payload:
+        return ""
+
+    marker_index = payload.find("\ufffd")
+    if marker_index == -1:
+        return payload
+
+    number_format_char = payload[marker_index + 1] if marker_index + 1 < len(payload) else "\x00"
+    key = (depth, payload)
+    restart = getattr(number_list, "Restart", None)
+    if isinstance(restart, int) and restart > 0:
+        current_value = restart
+    else:
+        current_value = list_state.get(key, 0) + 1
+    list_state[key] = current_value
+
+    prefix = payload[:marker_index]
+    suffix = payload[marker_index + 2 :]
+    return f"{prefix}{_format_list_number(current_value, ord(number_format_char))}{suffix}"
+
+
+def _render_outline_list_item(pdf, outline_element, rich_text, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None, depth: int, options: PdfSaveOptions | None, list_state: dict[tuple[int, str], int]) -> tuple[float, float]:
+    item_start_x = start_x + (depth * _OUTLINE_LEVEL_INDENT)
+    tag_offset = _tag_block_width(pdf, _tags_for_node(rich_text), options)
+    if tag_offset:
+        _render_note_tags(pdf, _tags_for_node(rich_text), item_start_x, cursor_y, options)
+
+    marker_text = ""
+    number_list = getattr(outline_element, "NumberList", None)
+    if number_list is not None:
+        marker_text = _resolve_list_marker_text(number_list, depth, list_state)
+
+    marker_width = 0.0
+    marker_x = item_start_x + tag_offset
+    if marker_text:
+        marker_font = _register_font_variant("sans", False, False)
+        marker_width = max(_string_width(pdf, marker_text, marker_font, 11.0), _OUTLINE_MARKER_MIN_WIDTH)
+        pdf.setFont(marker_font, 11.0)
+        _set_fill_color(pdf, (0.0, 0.0, 0.0))
+        pdf.drawString(marker_x, cursor_y, marker_text)
+
+    text_start_x = marker_x + (marker_width + _OUTLINE_MARKER_GAP if marker_width else 0.0)
+    render_max_width = max(max_width - (text_start_x - start_x), 1.0) if max_width is not None else None
+    _, cursor_y = _render_runs(pdf, _iter_runs(rich_text), text_start_x, cursor_y, page_width, page_height, default_font="Arial", default_size=11.0)
+    return cursor_y, text_start_x
+
+
+def _render_outline_element(pdf, outline_element, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None, depth: int, options: PdfSaveOptions | None, list_state: dict[tuple[int, str], int]) -> float:
+    from ..model import OutlineElement, RichText
+
+    text_start_x = start_x + ((depth + 1) * _OUTLINE_LEVEL_INDENT)
+    rendered_rich_text = False
+
+    for child in outline_element:
+        if isinstance(child, RichText):
+            if not _plain_text_from_rich_text(child):
+                continue
+            cursor_y, text_start_x = _render_outline_list_item(
+                pdf,
+                outline_element,
+                child,
+                cursor_y,
+                page_width,
+                page_height,
+                start_x,
+                max_width,
+                depth,
+                options,
+                list_state,
+            )
+            rendered_rich_text = True
+            continue
+
+        child_start_x = text_start_x if rendered_rich_text else (start_x + (depth * _OUTLINE_LEVEL_INDENT))
+        child_max_width = max(max_width - (child_start_x - start_x), 1.0) if max_width is not None else None
+        next_depth = depth + 1 if isinstance(child, OutlineElement) else depth
+        cursor_y = _render_outline_content(
+            pdf,
+            child,
+            cursor_y,
+            page_width,
+            page_height,
+            child_start_x if next_depth == depth else start_x,
+            max_width=child_max_width if next_depth == depth else max_width,
+            options=options,
+            list_state=list_state,
+            outline_depth=next_depth,
+        )
+
     return cursor_y
 
 
@@ -642,7 +1272,7 @@ def _resolve_table_column_widths(table, column_count: int, available_width: floa
     return [equal_width] * column_count
 
 
-def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None) -> float:
+def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None, options: PdfSaveOptions | None = None) -> float:
     try:
         from reportlab.lib import colors
         from reportlab.platypus import Table as FlowTable
@@ -659,6 +1289,13 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
 
     if not rendered_rows or column_count == 0:
         return cursor_y
+
+    tag_offset = _tag_block_width(pdf, _tags_for_node(table), options)
+    if tag_offset:
+        _render_note_tags(pdf, _tags_for_node(table), start_x, cursor_y, options)
+        start_x += tag_offset
+        if max_width is not None:
+            max_width = max(max_width - tag_offset, 1.0)
 
     available_width = max(_container_width(page_width, start_x, max_width), 72.0)
     column_widths = _resolve_table_column_widths(table, column_count, available_width)
@@ -726,7 +1363,7 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
     return cursor_y - 12
 
 
-def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None) -> float:
+def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None, options: PdfSaveOptions | None = None) -> float:
     try:
         from reportlab.lib.utils import ImageReader
     except ImportError as exc:  # pragma: no cover
@@ -736,6 +1373,13 @@ def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: f
         return cursor_y
     if cursor_y < 180:
         cursor_y = _show_page(pdf, page_height)
+
+    tag_offset = _tag_block_width(pdf, _tags_for_node(image), options)
+    if tag_offset:
+        _render_note_tags(pdf, _tags_for_node(image), start_x, cursor_y, options)
+        start_x += tag_offset
+        if max_width is not None:
+            max_width = max(max_width - tag_offset, 1.0)
 
     try:
         img = ImageReader(BytesIO(bytes(image.Bytes)))
@@ -753,9 +1397,15 @@ def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: f
         return cursor_y - 14
 
 
-def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None) -> float:
-    from ..model import RichText, Table
+def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None, options: PdfSaveOptions | None = None, list_state: dict[tuple[int, str], int] | None = None, outline_depth: int = 0) -> float:
+    from ..model import OutlineElement, RichText, Table
     from ..model import Image as NoteImage
+
+    if list_state is None:
+        list_state = {}
+
+    if isinstance(node, OutlineElement):
+        return _render_outline_element(pdf, node, cursor_y, page_width, page_height, start_x, max_width, outline_depth, options, list_state)
 
     if isinstance(node, RichText):
         if _has_ancestor_of_type(node, Table):
@@ -764,29 +1414,35 @@ def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_
             return cursor_y
         runs = _iter_runs(node)
         alignment = _rich_text_alignment(node)
+        tag_offset = _tag_block_width(pdf, _tags_for_node(node), options)
         text = "".join(_sanitize_text(getattr(run, "Text", "")) for run in runs)
-        container_width = _container_width(page_width, start_x, max_width)
-        if alignment in {HorizontalAlignment.Center, HorizontalAlignment.Right} and "\n" not in text:
+        render_start_x = start_x + tag_offset
+        render_max_width = max(max_width - tag_offset, 1.0) if max_width is not None and tag_offset else max_width
+        if tag_offset:
+            _render_note_tags(pdf, _tags_for_node(node), start_x, cursor_y, options)
+        container_width = _container_width(page_width, render_start_x, render_max_width)
+        if not tag_offset and alignment in {HorizontalAlignment.Center, HorizontalAlignment.Right} and "\n" not in text:
             return _render_aligned_single_line_rich_text(
                 pdf,
                 runs,
                 cursor_y,
-                start_x,
+                render_start_x,
                 container_width,
                 alignment,
                 default_font="Arial",
                 default_size=11.0,
             )
-        return _render_rich_text(pdf, node, cursor_y, page_width, page_height, start_x=start_x, default_font="Arial", default_size=11.0)
+        _, cursor_y = _render_runs(pdf, runs, render_start_x, cursor_y, page_width, page_height, default_font="Arial", default_size=11.0)
+        return cursor_y
 
     if isinstance(node, Table):
-        return _render_table(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width)
+        return _render_table(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width, options=options)
 
     if isinstance(node, NoteImage):
-        return _render_image(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width)
+        return _render_image(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width, options=options)
 
     for child in node:
-        cursor_y = _render_outline_content(pdf, child, cursor_y, page_width, page_height, start_x, max_width=max_width)
+        cursor_y = _render_outline_content(pdf, child, cursor_y, page_width, page_height, start_x, max_width=max_width, options=options, list_state=list_state, outline_depth=outline_depth)
     return cursor_y
 
 
@@ -818,7 +1474,7 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
             if current_page.Title is not None:
                 if current_page.Title.TitleText is not None:
                     title_nodes.add(id(current_page.Title.TitleText))
-                    cursor_y = _render_rich_text(pdf, current_page.Title.TitleText, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=14.0)
+                    cursor_y = _render_rich_text(pdf, current_page.Title.TitleText, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=14.0, options=options)
 
                 meta_nodes = []
                 if current_page.Title.TitleDate is not None:
@@ -840,7 +1496,7 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                 outline_max_width = max(float(getattr(outline, "Width", 0.0) or 0.0), 0.0) * _POINTS_PER_HALF_INCH or None
                 for rich_text in outline.GetChildNodes(RichText):
                     rendered_outline_text_ids.add(id(rich_text))
-                outline_cursor_y = _render_outline_content(pdf, outline, outline_cursor_y, width, height, outline_start_x, max_width=outline_max_width)
+                outline_cursor_y = _render_outline_content(pdf, outline, outline_cursor_y, width, height, outline_start_x, max_width=outline_max_width, options=options)
                 next_outline_y = outline_cursor_y - 8
 
             cursor_y = min(cursor_y, next_outline_y)
@@ -850,19 +1506,19 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                     continue
                 if not _plain_text_from_rich_text(rich_text):
                     continue
-                cursor_y = _render_rich_text(pdf, rich_text, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=11.0)
+                cursor_y = _render_rich_text(pdf, rich_text, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=11.0, options=options)
 
             for table in current_page.GetChildNodes(Table):
                 if _has_ancestor_of_type(table, Outline):
                     continue
-                cursor_y = _render_table(pdf, table, cursor_y, width, height, start_x=_LEFT_MARGIN)
+                cursor_y = _render_table(pdf, table, cursor_y, width, height, start_x=_LEFT_MARGIN, options=options)
 
             for image in current_page.GetChildNodes(Image):
                 if _has_ancestor_of_type(image, Outline):
                     continue
                 if not image.Bytes:
                     continue
-                cursor_y = _render_image(pdf, image, cursor_y, width, height, start_x=_LEFT_MARGIN)
+                cursor_y = _render_image(pdf, image, cursor_y, width, height, start_x=_LEFT_MARGIN, options=options)
 
             if index != len(selected) - 1:
                 pdf.showPage()

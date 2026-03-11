@@ -50,6 +50,143 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         doc.Save(buf, PdfSaveOptions(SaveFormat.Pdf))
         self.assertTrue(buf.getvalue().startswith(b"%PDF"))
 
+    def test_pdf_writer_renders_note_tags(self) -> None:
+        from aspose.note import Document, NoteTag, Page, PdfSaveOptions, RichText, SaveFormat
+        from aspose.note.saving.pdf_writer import write_pdf
+
+        class FakeCanvas:
+            instances: list["FakeCanvas"] = []
+
+            def __init__(self, buffer: io.BytesIO) -> None:
+                self._buffer = buffer
+                self._pagesize = (595, 842)
+                self.drawn_strings: list[str] = []
+                self.font_calls: list[tuple[str, float]] = []
+                self.fill_colors: list[tuple[float, float, float]] = []
+                self.stroke_colors: list[tuple[float, float, float]] = []
+                self.rect_calls: list[tuple[float, float, float, float, int, int]] = []
+                self.line_calls: list[tuple[float, float, float, float]] = []
+                FakeCanvas.instances.append(self)
+
+            def setFont(self, name: str, size: int) -> None:  # noqa: N802
+                self.font_calls.append((name, size))
+
+            def drawString(self, x: int, y: int, text: str) -> None:  # noqa: N802
+                self.drawn_strings.append(text)
+
+            def setFillColorRGB(self, r: float, g: float, b: float) -> None:  # noqa: N802
+                self.fill_colors.append((r, g, b))
+
+            def setStrokeColorRGB(self, r: float, g: float, b: float) -> None:  # noqa: N802
+                self.stroke_colors.append((r, g, b))
+
+            def rect(self, x: float, y: float, width: float, height: float, stroke: int = 0, fill: int = 0) -> None:
+                self.rect_calls.append((x, y, width, height, stroke, fill))
+
+            def line(self, x1: float, y1: float, x2: float, y2: float) -> None:
+                self.line_calls.append((x1, y1, x2, y2))
+
+            def stringWidth(self, text: str, font_name: str, font_size: float) -> float:  # noqa: N802
+                return len(text) * font_size * 0.55
+
+            def drawImage(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003, N802
+                return None
+
+            def showPage(self) -> None:  # noqa: N802
+                return None
+
+            def save(self) -> None:
+                self._buffer.write(b"%PDF-fake")
+
+        tagged = RichText(Text="Tagged body")
+        tagged.Tags = [
+            NoteTag(shape=13, label="Важно"),
+            NoteTag(shape=3, label="Дела"),
+            NoteTag(shape=121, label="Послушать музыку"),
+            NoteTag(shape=999, label="XY"),
+        ]
+
+        doc = Document()
+        page = Page()
+        page.AppendChildLast(tagged)
+        doc.AppendChildLast(page)
+
+        with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
+            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+
+        canvas = FakeCanvas.instances[0]
+        self.assertIn("Tagged body", canvas.drawn_strings)
+        self.assertTrue(canvas.rect_calls)
+        self.assertTrue(canvas.line_calls)
+
+    def test_pdf_writer_renders_tags_in_visual_reverse_order(self) -> None:
+        from aspose.note import Document, NoteTag, Page, PdfSaveOptions, RichText, SaveFormat
+        from aspose.note.saving import pdf_writer
+
+        class FakeCanvas:
+            def __init__(self, buffer: io.BytesIO) -> None:
+                self._buffer = buffer
+                self._pagesize = (595, 842)
+
+            def setFont(self, name: str, size: int) -> None:  # noqa: N802
+                return None
+
+            def drawString(self, x: int, y: int, text: str) -> None:  # noqa: N802
+                return None
+
+            def setFillColorRGB(self, r: float, g: float, b: float) -> None:  # noqa: N802
+                return None
+
+            def setStrokeColorRGB(self, r: float, g: float, b: float) -> None:  # noqa: N802
+                return None
+
+            def rect(self, x: float, y: float, width: float, height: float, stroke: int = 0, fill: int = 0) -> None:
+                return None
+
+            def line(self, x1: float, y1: float, x2: float, y2: float) -> None:
+                return None
+
+            def stringWidth(self, text: str, font_name: str, font_size: float) -> float:  # noqa: N802
+                return len(text) * font_size * 0.55
+
+            def drawImage(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003, N802
+                return None
+
+            def showPage(self) -> None:  # noqa: N802
+                return None
+
+            def save(self) -> None:
+                self._buffer.write(b"%PDF-fake")
+
+        tagged = RichText(Text="Tagged body")
+        tagged.Tags = [
+            NoteTag(shape=13, label="Важно"),
+            NoteTag(shape=15, label="Вопрос"),
+            NoteTag(shape=3, label="Дела"),
+        ]
+
+        doc = Document()
+        page = Page()
+        page.AppendChildLast(tagged)
+        doc.AppendChildLast(page)
+
+        rendered_shapes: list[int | None] = []
+
+        def _capture_tag(pdf, tag, x: float, baseline_y: float, options):
+            rendered_shapes.append(getattr(tag, "shape", None))
+            return 10.0
+
+        with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas), patch.object(pdf_writer, "_render_note_tag", side_effect=_capture_tag):
+            pdf_writer.write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+
+        self.assertEqual(rendered_shapes, [3, 15, 13])
+
+    def test_question_tag_uses_distinct_color(self) -> None:
+        from aspose.note.saving.pdf_writer import _tag_color
+
+        self.assertEqual(_tag_color(15), (0.64, 0.32, 0.82))
+        self.assertNotEqual(_tag_color(15), _tag_color(13))
+
     def test_pdf_writer_does_not_duplicate_rich_text(self) -> None:
         from aspose.note import Document, Page, PdfSaveOptions, RichText, SaveFormat, Title
         from aspose.note.saving.pdf_writer import write_pdf
