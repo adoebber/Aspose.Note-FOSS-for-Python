@@ -438,6 +438,110 @@ def _outline_y_position(content_origin_y: float, outline) -> float:
     return content_origin_y - max(float(getattr(outline, "Y", 0.0) or 0.0), 0.0) * _POINTS_PER_CM
 
 
+def _table_cell_text(cell) -> str:
+    from ..model import RichText
+
+    texts = [_plain_text_from_rich_text(rich_text) for rich_text in cell.GetChildNodes(RichText)]
+    return "\n".join(text for text in texts if text)
+
+
+def _resolve_table_column_widths(table, column_count: int, available_width: float) -> list[float]:
+    if column_count <= 0:
+        return []
+
+    raw_widths = [float(width) for width in getattr(table, "ColumnWidths", []) if float(width) > 1.0]
+    if len(raw_widths) >= column_count:
+        total_width = sum(raw_widths[:column_count])
+        if total_width > 0:
+            scale = available_width / total_width
+            return [max(width * scale, 36.0) for width in raw_widths[:column_count]]
+
+    equal_width = max(available_width / column_count, 36.0)
+    return [equal_width] * column_count
+
+
+def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: float, start_x: float) -> float:
+    try:
+        from reportlab.lib import colors
+        from reportlab.platypus import Table as FlowTable
+        from reportlab.platypus import TableStyle
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("PDF export requires reportlab") from exc
+
+    rows: list[list[str]] = []
+    column_count = 0
+    for row in table:
+        rendered_row = [_table_cell_text(cell) for cell in row]
+        column_count = max(column_count, len(rendered_row))
+        rows.append(rendered_row)
+
+    if not rows or column_count == 0:
+        return cursor_y
+
+    normalized_rows = [row + [""] * (column_count - len(row)) for row in rows]
+    available_width = max(page_width - _RIGHT_MARGIN - start_x, 72.0)
+    column_widths = _resolve_table_column_widths(table, column_count, available_width)
+    grid_color = colors.Color(0.55, 0.55, 0.55)
+
+    flowable = FlowTable(normalized_rows, colWidths=column_widths)
+    flowable.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), _register_font_variant("sans", False, False)),
+                ("FONTSIZE", (0, 0), (-1, -1), 11),
+                ("LEADING", (0, 0), (-1, -1), 13),
+                ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
+            ]
+        )
+    )
+
+    pending_parts = [flowable]
+    while pending_parts:
+        current_part = pending_parts.pop(0)
+        available_height = max(cursor_y - _BOTTOM_MARGIN, 1.0)
+        _, height_used = current_part.wrapOn(pdf, available_width, available_height)
+        if height_used <= available_height:
+            current_part.drawOn(pdf, start_x, cursor_y - height_used)
+            cursor_y -= height_used
+            if pending_parts:
+                cursor_y = _show_page(pdf, page_height)
+            continue
+
+        parts = current_part.splitOn(pdf, available_width, available_height)
+        if parts:
+            pending_parts = list(parts) + pending_parts
+            continue
+
+        cursor_y = _show_page(pdf, page_height)
+
+    return cursor_y - 12
+
+
+def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_height: float, start_x: float) -> float:
+    from ..model import RichText, Table
+
+    if isinstance(node, RichText):
+        if _has_ancestor_of_type(node, Table):
+            return cursor_y
+        if not _plain_text_from_rich_text(node):
+            return cursor_y
+        return _render_rich_text(pdf, node, cursor_y, page_width, page_height, start_x=start_x, default_font="Arial", default_size=11.0)
+
+    if isinstance(node, Table):
+        return _render_table(pdf, node, cursor_y, page_width, page_height, start_x=start_x)
+
+    for child in node:
+        cursor_y = _render_outline_content(pdf, child, cursor_y, page_width, page_height, start_x)
+    return cursor_y
+
+
 def write_pdf(document, options: PdfSaveOptions) -> bytes:
     try:
         from reportlab.lib.utils import ImageReader
@@ -465,10 +569,6 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                 if page.Title.TitleText is not None:
                     title_nodes.add(id(page.Title.TitleText))
                     cursor_y = _render_rich_text(pdf, page.Title.TitleText, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=14.0)
-                elif document.DisplayName:
-                    pdf.setFont(_register_font_variant("sans", True, False), 14)
-                    pdf.drawString(_LEFT_MARGIN, cursor_y, document.DisplayName[:120])
-                    cursor_y -= 22
 
                 meta_nodes = []
                 if page.Title.TitleDate is not None:
@@ -480,11 +580,6 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                 if meta_nodes:
                     cursor_y = _render_inline_rich_texts(pdf, meta_nodes, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=9.0)
                 cursor_y -= 14
-            else:
-                title = document.DisplayName or "OneNote"
-                pdf.setFont(_register_font_variant("sans", True, False), 14)
-                pdf.drawString(_LEFT_MARGIN, cursor_y, title[:120])
-                cursor_y -= 22
 
             content_origin_y = cursor_y
             rendered_outline_text_ids: set[int] = set()
@@ -493,9 +588,7 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                 outline_start_x = _outline_x_position(outline)
                 for rich_text in outline.GetChildNodes(RichText):
                     rendered_outline_text_ids.add(id(rich_text))
-                    if not _plain_text_from_rich_text(rich_text):
-                        continue
-                    outline_cursor_y = _render_rich_text(pdf, rich_text, outline_cursor_y, width, height, start_x=outline_start_x, default_font="Arial", default_size=11.0)
+                outline_cursor_y = _render_outline_content(pdf, outline, outline_cursor_y, width, height, outline_start_x)
 
             for rich_text in page.GetChildNodes(RichText):
                 if id(rich_text) in title_nodes or id(rich_text) in rendered_outline_text_ids or _has_ancestor_of_type(rich_text, TableCell) or _has_ancestor_of_type(rich_text, Outline):
@@ -505,19 +598,9 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                 cursor_y = _render_rich_text(pdf, rich_text, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=11.0)
 
             for table in page.GetChildNodes(Table):
-                if cursor_y < _BOTTOM_MARGIN + 16:
-                    cursor_y = _show_page(pdf, height)
-                pdf.setFont(_register_font_variant("sans", True, False), 11)
-                pdf.drawString(_LEFT_MARGIN, cursor_y, "Table")
-                cursor_y -= 16
-                pdf.setFont(_register_font_variant("sans", False, False), 10)
-                for row in table:
-                    cell_texts: list[str] = []
-                    for cell in row:
-                        texts = [_plain_text_from_rich_text(rt) for rt in cell.GetChildNodes(RichText) if _plain_text_from_rich_text(rt)]
-                        cell_texts.append(" | ".join(texts))
-                    pdf.drawString(50, cursor_y, " || ".join(cell_texts)[:150])
-                    cursor_y -= 14
+                if _has_ancestor_of_type(table, Outline):
+                    continue
+                cursor_y = _render_table(pdf, table, cursor_y, width, height, start_x=_LEFT_MARGIN)
 
             for image in page.GetChildNodes(Image):
                 if not image.Bytes:

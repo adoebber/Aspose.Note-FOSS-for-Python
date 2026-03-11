@@ -6,7 +6,7 @@
       "image_count": 1,
       "index": 0,
       "links": [],
-      "text": "3ImagesWithDifferentAlignment\nImage in the outline with right alignment\nImage in the outline with center alignment\nImage in the outline with left alignment\nTable\nImage in the outline with right alignment\nTable\nImage in the outline with center alignment\nTable\nImage in the outline with left alignment"
+      "text": "Image in the outline with right alignment\nImage in the outline with center alignment\nImage in the outline with left alignment"
     }
   ],
   "schema_version": 1
