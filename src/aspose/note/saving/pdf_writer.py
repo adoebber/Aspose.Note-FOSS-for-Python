@@ -438,6 +438,39 @@ def _outline_y_position(content_origin_y: float, outline) -> float:
     return content_origin_y - max(float(getattr(outline, "Y", 0.0) or 0.0), 0.0) * _POINTS_PER_CM
 
 
+def _scale_dimensions_to_fit(width: float, height: float, max_width: float, max_height: float) -> tuple[float, float]:
+    if width <= 0 or height <= 0:
+        return width, height
+    width_scale = max_width / width if max_width > 0 else 1.0
+    height_scale = max_height / height if max_height > 0 else 1.0
+    scale = min(width_scale, height_scale, 1.0)
+    return width * scale, height * scale
+
+
+def _resolve_image_draw_size(image, image_reader, page_width: float, cursor_y: float) -> tuple[float, float]:
+    pixel_width, pixel_height = image_reader.getSize()
+    aspect_ratio = (float(pixel_width) / float(pixel_height)) if pixel_width and pixel_height else 1.0
+
+    width_cm = max(float(getattr(image, "Width", 0.0) or 0.0), 0.0)
+    height_cm = max(float(getattr(image, "Height", 0.0) or 0.0), 0.0)
+    if width_cm > 0 and height_cm > 0:
+        draw_width = width_cm * _POINTS_PER_CM
+        draw_height = height_cm * _POINTS_PER_CM
+    elif width_cm > 0:
+        draw_width = width_cm * _POINTS_PER_CM
+        draw_height = draw_width / aspect_ratio if aspect_ratio > 0 else draw_width
+    elif height_cm > 0:
+        draw_height = height_cm * _POINTS_PER_CM
+        draw_width = draw_height * aspect_ratio
+    else:
+        draw_width = float(pixel_width) * 0.75 if pixel_width else 220.0
+        draw_height = float(pixel_height) * 0.75 if pixel_height else 160.0
+
+    max_width = max(page_width - _LEFT_MARGIN - _RIGHT_MARGIN, 1.0)
+    max_height = max(cursor_y - _BOTTOM_MARGIN, 1.0)
+    return _scale_dimensions_to_fit(draw_width, draw_height, max_width, max_height)
+
+
 def _table_cell_text(cell) -> str:
     from ..model import RichText
 
@@ -609,9 +642,8 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                     cursor_y = _show_page(pdf, height)
                 try:
                     img = ImageReader(BytesIO(bytes(image.Bytes)))
-                    draw_width = min(220, image.Width or 220)
-                    draw_height = min(160, image.Height or 160)
-                    pdf.drawImage(img, _LEFT_MARGIN, max(_LEFT_MARGIN, cursor_y - draw_height), width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
+                    draw_width, draw_height = _resolve_image_draw_size(image, img, width, cursor_y)
+                    pdf.drawImage(img, _LEFT_MARGIN, max(_BOTTOM_MARGIN, cursor_y - draw_height), width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
                     cursor_y -= draw_height + 12
                 except Exception:
                     pdf.setFont(_register_font_variant("sans", False, True), 10)
