@@ -1,0 +1,13 @@
+{
+  "fixture": "SimpleTable.one",
+  "page_count": 1,
+  "pages": [
+    {
+      "image_count": 0,
+      "index": 0,
+      "links": [],
+      "text": "SimpleTable\n1\n2\n3\n6\n5\n4\n7\n8\n9\nb\na\n0\nTable\n1 || 2 || 3\n6 || 5 || 4\n7 || 8 || 9\nb || a || 0"
+    }
+  ],
+  "schema_version": 1
+}

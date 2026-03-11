@@ -75,6 +75,40 @@ PDF export requires ReportLab:
 python -m pip install -e ".[pdf]"
 ```
 
+Semantic PDF golden tests require `pypdf` in addition to ReportLab:
+
+```bash
+python -m pip install -e ".[pdf,test-pdf]"
+```
+
+## PDF golden workflow
+
+Golden PDFs are stored under `tests/goldens/pdf/` together with JSON manifests extracted from the generated PDF.
+The test suite compares manifests, not raw PDF bytes, so it stays stable across platforms and ReportLab internals.
+The PDF writer now uses deterministic Base-14 fonts by default. If you explicitly want to try Windows system fonts for local inspection, set `ASPOSE_NOTE_PDF_USE_SYSTEM_FONTS=1` before export.
+
+Regenerate the baselines with:
+
+```bash
+python tools/regenerate_pdf_goldens.py
+```
+
+To rebuild only selected cases:
+
+```bash
+python tools/regenerate_pdf_goldens.py --case formatted_richtext --case simple_table
+```
+
+Run the verification suite with:
+
+```bash
+python -m unittest tests.test_aspose_note_pdf_goldens -v
+```
+
+On mismatch, generated PDFs and manifests are written to `tests/out/pdf_golden_failures/` for inspection.
+If `PyMuPDF` is installed, the failing test also renders baseline/generated pages to PNG and writes visual diff artifacts into the same output tree.
+If `PyMuPDF` is unavailable but `pdftoppm` is available on `PATH`, the tests use `pdftoppm` as a fallback renderer.
+
 PyPI release page (maintainers): https://pypi.org/manage/project/aspose-note/releases/
 
 ## 🧩 Public API (what is considered supported)

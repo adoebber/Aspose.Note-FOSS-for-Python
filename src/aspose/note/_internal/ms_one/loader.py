@@ -383,10 +383,13 @@ class _Builder:
         if not isinstance(raw, (bytes, bytearray)) or run_count <= 0:
             return [0] * run_count
         for width in (4, 2):
-            if len(raw) >= width * run_count and len(raw) % width == 0:
-                values = [int.from_bytes(raw[index : index + width], "little") for index in range(0, min(len(raw), width * run_count), width)]
-                if values and all(0 <= value <= text_length for value in values):
-                    return values[:run_count]
+            if len(raw) % width != 0:
+                continue
+            values = [int.from_bytes(raw[index : index + width], "little") for index in range(0, len(raw), width)]
+            if len(values) not in {run_count - 1, run_count}:
+                continue
+            if values and all(0 <= value <= text_length for value in values) and values == sorted(values):
+                return values[:run_count]
         return [0] * run_count
 
     def _build_richtext(self, node: LogicalNode) -> RichText:

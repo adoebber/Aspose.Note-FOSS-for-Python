@@ -28,6 +28,7 @@ dependencies = []
 
 [project.optional-dependencies]
 pdf = ["reportlab>=3.6"]
+test-pdf = ["pypdf>=5.3", "Pillow>=10.0", "PyMuPDF>=1.25"]
 dev = ["build>=1.2", "twine>=5.0"]
 
 [project.urls]

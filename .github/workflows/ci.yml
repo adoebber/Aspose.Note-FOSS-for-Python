@@ -11,6 +11,8 @@ jobs:
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    env:
+      ASPOSE_NOTE_PDF_USE_SYSTEM_FONTS: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +30,26 @@ jobs:
       - name: Install package + deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[pdf]"
+          python -m pip install -e ".[pdf,test-pdf]"
 
-      - name: Run tests
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run unit test suite
+        run: |
+          python -m unittest tests.test_imports_smoke -v
+          python -m unittest tests.test_aspose_note_compat_smoke -v
+          python -m unittest tests.test_aspose_note_dom_content -v
+          python -m unittest tests.test_aspose_note_dom_document -v
+          python -m unittest tests.test_aspose_note_exceptions_and_stubs -v
+          python -m unittest tests.test_aspose_note_richtext_formatting -v
+          python -m unittest tests.test_aspose_note_save_options -v
+          python -m unittest tests.test_aspose_note_tags -v
+
+      - name: Run PDF golden tests
+        run: python -m unittest tests.test_aspose_note_pdf_goldens -v
+
+      - name: Upload PDF golden diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-golden-failures-py${{ matrix.python-version }}
+          path: tests/out/pdf_golden_failures/
+          if-no-files-found: ignore
