@@ -897,6 +897,32 @@ def _tags_for_node(node):
     return _dedupe_tags(getattr(node, "Tags", None) or [])
 
 
+def _simple_text_style(font_size: float, *, bold: bool = False, italic: bool = False, font_color: int | None = None):
+    return SimpleNamespace(
+        FontName=None,
+        FontSize=font_size,
+        FontColor=font_color,
+        HighlightColor=None,
+        Bold=bold,
+        Italic=italic,
+        Underline=False,
+        Strikethrough=False,
+        Superscript=False,
+        Subscript=False,
+        HyperlinkAddress=None,
+        IsHyperlink=False,
+    )
+
+
+def _simple_text_run(text: str, font_size: float, *, bold: bool = False, italic: bool = False, font_color: int | None = None):
+    return SimpleNamespace(Text=text, Style=_simple_text_style(font_size, bold=bold, italic=italic, font_color=font_color))
+
+
+def _attachment_display_name(attached_file) -> str:
+    name = (getattr(attached_file, "FileName", None) or "").strip()
+    return name or "attachment.bin"
+
+
 def _number_list_payload(fmt: str | None) -> str:
     if not fmt:
         return ""
@@ -1160,10 +1186,10 @@ def _table_cell_text(cell) -> str:
 
 
 def _iter_renderable_descendants(node):
-    from ..model import Image, RichText
+    from ..model import AttachedFile, Image, RichText
 
     for child in node:
-        if isinstance(child, (Image, RichText)):
+        if isinstance(child, (AttachedFile, Image, RichText)):
             yield child
             continue
         yield from _iter_renderable_descendants(child)
@@ -1212,6 +1238,50 @@ def _rich_text_to_paragraph(rich_text, max_width: float, default_alignment: Hori
     return paragraph
 
 
+def _attached_file_name_to_paragraph(attached_file, max_width: float, default_alignment: HorizontalAlignment | None = None):
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph
+
+    text = escape(_attachment_display_name(attached_file))
+    style = ParagraphStyle(
+        name="AsposeNoteAttachmentName",
+        fontName=_register_font_variant("sans", False, False),
+        fontSize=10,
+        leading=12,
+        alignment=_paragraph_alignment_value(default_alignment),
+        wordWrap="CJK",
+    )
+    paragraph = Paragraph(text, style)
+    paragraph.width = max_width
+    return paragraph
+
+
+def _attached_file_to_flowable(attached_file, max_width: float, default_alignment: HorizontalAlignment | None = None):
+    from reportlab.platypus import Flowable
+
+    tags = _tags_for_node(attached_file)
+    if not tags:
+        return None
+
+    class AttachmentTagFlowable(Flowable):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hAlign = _flowable_alignment_value(default_alignment)
+            self.width = min(_tag_block_width(None, tags, None), max_width)
+            self.height = _normalize_tag_icon_size(None)
+
+        def wrap(self, aW, aH):
+            width = min(self.width, aW)
+            height = min(self.height, aH if aH > 0 else self.height)
+            return width, height
+
+        def draw(self):
+            baseline_y = _normalize_tag_icon_size(None) * 0.18
+            _render_note_tags(self.canv, tags, 0.0, baseline_y, None)
+
+    return AttachmentTagFlowable()
+
+
 def _image_to_flowable(image, max_width: float):
     from reportlab.platypus import Image as FlowImage
     from reportlab.lib.utils import ImageReader
@@ -1240,13 +1310,25 @@ def _table_cell_alignment(cell) -> HorizontalAlignment | None:
 
 def _table_cell_flowables(cell, max_width: float, default_alignment: HorizontalAlignment | None = None):
     from reportlab.platypus import Spacer
-    from ..model import Image, RichText
+    from ..model import AttachedFile, Image, RichText
 
     flowables = []
     for node in _iter_renderable_descendants(cell):
         flowable = None
         if isinstance(node, Image):
             flowable = _image_to_flowable(node, max(max_width, 1.0))
+        elif isinstance(node, AttachedFile):
+            attachment_flowables = [
+                _attached_file_name_to_paragraph(node, max(max_width, 1.0), default_alignment=default_alignment),
+                _attached_file_to_flowable(node, max(max_width, 1.0), default_alignment=default_alignment),
+            ]
+            for attachment_flowable in attachment_flowables:
+                if attachment_flowable is None:
+                    continue
+                if flowables:
+                    flowables.append(Spacer(1, 4))
+                flowables.append(attachment_flowable)
+            continue
         elif isinstance(node, RichText):
             flowable = _rich_text_to_paragraph(node, max(max_width, 1.0), default_alignment=default_alignment)
         if flowable is None:
@@ -1397,8 +1479,34 @@ def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: f
         return cursor_y - 14
 
 
+def _render_attached_file(pdf, attached_file, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None, options: PdfSaveOptions | None = None) -> float:
+    if cursor_y < 96:
+        cursor_y = _show_page(pdf, page_height)
+
+    tags = _tags_for_node(attached_file)
+    tag_offset = _tag_block_width(pdf, tags, options)
+    if tag_offset:
+        _render_note_tags(pdf, tags, start_x, cursor_y, options)
+
+    render_start_x = start_x + tag_offset
+    render_max_width = max(max_width - tag_offset, 1.0) if max_width is not None and tag_offset else max_width
+    _, cursor_y = _render_runs(
+        pdf,
+        [_simple_text_run(_attachment_display_name(attached_file), 11.0)],
+        render_start_x,
+        cursor_y,
+        page_width,
+        page_height,
+        default_font="Arial",
+        default_size=11.0,
+    )
+    if tag_offset:
+        return min(cursor_y, cursor_y - 0.0)
+    return cursor_y
+
+
 def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None, options: PdfSaveOptions | None = None, list_state: dict[tuple[int, str], int] | None = None, outline_depth: int = 0) -> float:
-    from ..model import OutlineElement, RichText, Table
+    from ..model import AttachedFile, OutlineElement, RichText, Table
     from ..model import Image as NoteImage
 
     if list_state is None:
@@ -1441,6 +1549,9 @@ def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_
     if isinstance(node, NoteImage):
         return _render_image(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width, options=options)
 
+    if isinstance(node, AttachedFile):
+        return _render_attached_file(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width, options=options)
+
     for child in node:
         cursor_y = _render_outline_content(pdf, child, cursor_y, page_width, page_height, start_x, max_width=max_width, options=options, list_state=list_state, outline_depth=outline_depth)
     return cursor_y
@@ -1466,7 +1577,7 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
     for index, page in enumerate(selected):
         cursor_y = height - _TOP_MARGIN
         if page is not None:
-            from ..model import Image, Outline, Page, RichText, Table, TableCell
+            from ..model import AttachedFile, Image, Outline, Page, RichText, Table, TableCell
 
             current_page = cast(Page, page)
 
@@ -1519,6 +1630,11 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
                 if not image.Bytes:
                     continue
                 cursor_y = _render_image(pdf, image, cursor_y, width, height, start_x=_LEFT_MARGIN, options=options)
+
+            for attached_file in current_page.GetChildNodes(AttachedFile):
+                if _has_ancestor_of_type(attached_file, Outline) or _has_ancestor_of_type(attached_file, TableCell):
+                    continue
+                cursor_y = _render_attached_file(pdf, attached_file, cursor_y, width, height, start_x=_LEFT_MARGIN, options=options)
 
             if index != len(selected) - 1:
                 pdf.showPage()
