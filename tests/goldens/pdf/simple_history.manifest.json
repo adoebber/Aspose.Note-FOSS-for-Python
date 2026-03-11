@@ -1,0 +1,13 @@
+{
+  "fixture": "SimpleHistory.one",
+  "page_count": 1,
+  "pages": [
+    {
+      "image_count": 0,
+      "index": 0,
+      "links": [],
+      "text": "2 \u0444\u0435\u0432\u0440\u0430\u043b\u044f 2021 \u0433.\n16:34\nThird text"
+    }
+  ],
+  "schema_version": 1
+}

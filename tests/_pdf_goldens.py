@@ -55,10 +55,17 @@ class PdfGoldenCase:
 
 
 PDF_GOLDEN_CASES: tuple[PdfGoldenCase, ...] = (
+    PdfGoldenCase("attached_file_with_tag", "AttachedFileWithTag.one"),
     PdfGoldenCase("formatted_richtext", "FormattedRichText.one"),
+    PdfGoldenCase("image_with_tag", "ImageWithTag.one"),
     PdfGoldenCase("simple_table", "SimpleTable.one"),
     PdfGoldenCase("numbered_list_with_tags", "NumberedListWithTags.one"),
     PdfGoldenCase("images_with_alignment", "3ImagesWithDifferentAlignment.one"),
+    PdfGoldenCase("one_page_with_file", "OnePageWithFile.one"),
+    PdfGoldenCase("simple_history", "SimpleHistory.one"),
+    PdfGoldenCase("simple_image_from_separate_file", "SimpleImageFromSeparateFile.one"),
+    PdfGoldenCase("table_with_tag", "TableWithTag.one"),
+    PdfGoldenCase("tag_sizes", "TagSizes.one"),
 )
 
 

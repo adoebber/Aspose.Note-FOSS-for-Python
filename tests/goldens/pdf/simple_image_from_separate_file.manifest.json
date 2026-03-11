@@ -1,0 +1,13 @@
+{
+  "fixture": "SimpleImageFromSeparateFile.one",
+  "page_count": 1,
+  "pages": [
+    {
+      "image_count": 1,
+      "index": 0,
+      "links": [],
+      "text": ""
+    }
+  ],
+  "schema_version": 1
+}
