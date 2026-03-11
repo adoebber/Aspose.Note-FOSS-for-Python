@@ -43,6 +43,21 @@ class TestAsposeNoteImages(unittest.TestCase):
         digests = [hashlib.sha256(bytes(img.Bytes)).digest() for img in images]
         self.assertEqual(len(set(digests)), 1)
 
+    def test_images_preserve_outline_alignment(self) -> None:
+        from aspose.note import Document, HorizontalAlignment, Image
+
+        doc = Document(self.path)
+        images = doc.GetChildNodes(Image)
+
+        self.assertEqual(
+            [image.HorizontalAlignment for image in images],
+            [
+                HorizontalAlignment.Right,
+                HorizontalAlignment.Center,
+                HorizontalAlignment.Left,
+            ],
+        )
+
 
 class TestAsposeNoteTables(unittest.TestCase):
     @classmethod

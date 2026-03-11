@@ -4,9 +4,12 @@ from io import BytesIO
 import os
 from pathlib import Path
 import re
+from typing import Literal, cast
 from urllib.parse import urlparse
+from xml.sax.saxutils import escape
 from types import SimpleNamespace
 
+from ..enums import HorizontalAlignment
 from .options import PdfSaveOptions
 
 
@@ -16,8 +19,9 @@ _LEFT_MARGIN = 40
 _TOP_MARGIN = 40
 _BOTTOM_MARGIN = 80
 _RIGHT_MARGIN = 40
-_CONTENT_MARGIN = 28.35
-_POINTS_PER_CM = 28.35
+_DEFAULT_PAGE_MARGIN_POINTS = 36.0
+_POINTS_PER_HALF_INCH = 36.0
+_POINTS_PER_IMAGE_CM = 28.35
 _WINDOWS_FONT_DIR = Path("C:/Windows/Fonts")
 _SYSTEM_FONT_ENV_VAR = "ASPOSE_NOTE_PDF_USE_SYSTEM_FONTS"
 _DEFAULT_HYPERLINK_COLOR = (0.0, 0.2, 0.65)
@@ -431,11 +435,26 @@ def _has_ancestor_of_type(node, node_type: type) -> bool:
 
 
 def _outline_x_position(outline) -> float:
-    return _CONTENT_MARGIN + max(float(getattr(outline, "X", 0.0) or 0.0), 0.0) * _POINTS_PER_CM
+    return _DEFAULT_PAGE_MARGIN_POINTS + max(float(getattr(outline, "X", 0.0) or 0.0), 0.0) * _POINTS_PER_HALF_INCH
 
 
 def _outline_y_position(content_origin_y: float, outline) -> float:
-    return content_origin_y - max(float(getattr(outline, "Y", 0.0) or 0.0), 0.0) * _POINTS_PER_CM
+    return content_origin_y - max(float(getattr(outline, "Y", 0.0) or 0.0), 0.0) * _POINTS_PER_HALF_INCH
+
+
+def _container_width(page_width: float, start_x: float, max_width: float | None = None) -> float:
+    available_width = max(page_width - _RIGHT_MARGIN - start_x, 1.0)
+    if max_width is None or max_width <= 0:
+        return available_width
+    return max(min(max_width, available_width), 1.0)
+
+
+def _aligned_x(start_x: float, content_width: float, container_width: float, horizontal_alignment: HorizontalAlignment | None) -> float:
+    if horizontal_alignment == HorizontalAlignment.Center:
+        return start_x + max((container_width - content_width) / 2.0, 0.0)
+    if horizontal_alignment == HorizontalAlignment.Right:
+        return start_x + max(container_width - content_width, 0.0)
+    return start_x
 
 
 def _scale_dimensions_to_fit(width: float, height: float, max_width: float, max_height: float) -> tuple[float, float]:
@@ -447,28 +466,60 @@ def _scale_dimensions_to_fit(width: float, height: float, max_width: float, max_
     return width * scale, height * scale
 
 
-def _resolve_image_draw_size(image, image_reader, page_width: float, cursor_y: float) -> tuple[float, float]:
+def _resolve_image_draw_size(image, image_reader, page_width: float, cursor_y: float, start_x: float = _LEFT_MARGIN, max_width: float | None = None) -> tuple[float, float]:
     pixel_width, pixel_height = image_reader.getSize()
     aspect_ratio = (float(pixel_width) / float(pixel_height)) if pixel_width and pixel_height else 1.0
 
     width_cm = max(float(getattr(image, "Width", 0.0) or 0.0), 0.0)
     height_cm = max(float(getattr(image, "Height", 0.0) or 0.0), 0.0)
     if width_cm > 0 and height_cm > 0:
-        draw_width = width_cm * _POINTS_PER_CM
-        draw_height = height_cm * _POINTS_PER_CM
+        draw_width = width_cm * _POINTS_PER_IMAGE_CM
+        draw_height = height_cm * _POINTS_PER_IMAGE_CM
     elif width_cm > 0:
-        draw_width = width_cm * _POINTS_PER_CM
+        draw_width = width_cm * _POINTS_PER_IMAGE_CM
         draw_height = draw_width / aspect_ratio if aspect_ratio > 0 else draw_width
     elif height_cm > 0:
-        draw_height = height_cm * _POINTS_PER_CM
+        draw_height = height_cm * _POINTS_PER_IMAGE_CM
         draw_width = draw_height * aspect_ratio
     else:
         draw_width = float(pixel_width) * 0.75 if pixel_width else 220.0
         draw_height = float(pixel_height) * 0.75 if pixel_height else 160.0
 
-    max_width = max(page_width - _LEFT_MARGIN - _RIGHT_MARGIN, 1.0)
+    available_width = _container_width(page_width, start_x, max_width)
     max_height = max(cursor_y - _BOTTOM_MARGIN, 1.0)
-    return _scale_dimensions_to_fit(draw_width, draw_height, max_width, max_height)
+    return _scale_dimensions_to_fit(draw_width, draw_height, available_width, max_height)
+
+
+def _rich_text_alignment(rich_text) -> HorizontalAlignment | None:
+    for run in _iter_runs(rich_text):
+        alignment = getattr(getattr(run, "Style", None), "HorizontalAlignment", None)
+        if alignment is not None:
+            return alignment
+    return None
+
+
+def _measure_runs_width(pdf, runs, default_font: str, default_size: float, default_bold: bool = False) -> float:
+    total = 0.0
+    for run in runs:
+        style = run.Style
+        text = _sanitize_text(getattr(run, "Text", ""))
+        if not text:
+            continue
+        font_size = max(float(getattr(style, "FontSize", None) or default_size), 1.0)
+        font_name = _font_name_for_style(style, default_font, text=text, default_bold=default_bold)
+        total += _string_width(pdf, text, font_name, font_size)
+    return total
+
+
+def _render_aligned_single_line_rich_text(pdf, runs, cursor_y: float, start_x: float, container_width: float, horizontal_alignment: HorizontalAlignment, default_font: str, default_size: float, default_bold: bool = False) -> float:
+    line_width = _measure_runs_width(pdf, runs, default_font, default_size, default_bold=default_bold)
+    x = _aligned_x(start_x, line_width, container_width, horizontal_alignment)
+    for run in runs:
+        text = _sanitize_text(getattr(run, "Text", ""))
+        if not text:
+            continue
+        x = _draw_segment(pdf, x, cursor_y, text, run.Style, default_font, default_size, default_bold=default_bold)
+    return cursor_y - (default_size * 1.35)
 
 
 def _table_cell_text(cell) -> str:
@@ -476,6 +527,104 @@ def _table_cell_text(cell) -> str:
 
     texts = [_plain_text_from_rich_text(rich_text) for rich_text in cell.GetChildNodes(RichText)]
     return "\n".join(text for text in texts if text)
+
+
+def _iter_renderable_descendants(node):
+    from ..model import Image, RichText
+
+    for child in node:
+        if isinstance(child, (Image, RichText)):
+            yield child
+            continue
+        yield from _iter_renderable_descendants(child)
+
+
+def _table_contains_images(table) -> bool:
+    from ..model import Image
+
+    return bool(table.GetChildNodes(Image))
+
+
+def _paragraph_alignment_value(alignment: HorizontalAlignment | None) -> Literal[0, 1, 2]:
+    if alignment == HorizontalAlignment.Center:
+        return 1
+    if alignment == HorizontalAlignment.Right:
+        return 2
+    return 0
+
+
+def _flowable_alignment_value(alignment: HorizontalAlignment | None) -> Literal["LEFT", "CENTER", "RIGHT"]:
+    if alignment == HorizontalAlignment.Center:
+        return "CENTER"
+    if alignment == HorizontalAlignment.Right:
+        return "RIGHT"
+    return "LEFT"
+
+
+def _rich_text_to_paragraph(rich_text, max_width: float, default_alignment: HorizontalAlignment | None = None):
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph
+
+    text = escape(_plain_text_from_rich_text(rich_text)).replace("\n", "<br/>")
+    if not text:
+        return None
+    alignment = _rich_text_alignment(rich_text) or default_alignment
+    style = ParagraphStyle(
+        name="AsposeNoteTableCell",
+        fontName=_register_font_variant("sans", False, False),
+        fontSize=11,
+        leading=13,
+        alignment=_paragraph_alignment_value(alignment),
+        wordWrap="CJK",
+    )
+    paragraph = Paragraph(text, style)
+    paragraph.width = max_width
+    return paragraph
+
+
+def _image_to_flowable(image, max_width: float):
+    from reportlab.platypus import Image as FlowImage
+    from reportlab.lib.utils import ImageReader
+
+    if not image.Bytes:
+        return None
+    image_reader = ImageReader(BytesIO(bytes(image.Bytes)))
+    draw_width, draw_height = _resolve_image_draw_size(image, image_reader, max_width, 10_000.0, start_x=0.0, max_width=max_width)
+    flowable = FlowImage(BytesIO(bytes(image.Bytes)), width=draw_width, height=draw_height)
+    flowable.hAlign = _flowable_alignment_value(getattr(image, "HorizontalAlignment", None))
+    return flowable
+
+
+def _table_cell_alignment(cell) -> HorizontalAlignment | None:
+    from ..model import Image, RichText
+
+    for node in _iter_renderable_descendants(cell):
+        if isinstance(node, Image) and getattr(node, "HorizontalAlignment", None) is not None:
+            return node.HorizontalAlignment
+        if isinstance(node, RichText):
+            alignment = _rich_text_alignment(node)
+            if alignment is not None:
+                return alignment
+    return None
+
+
+def _table_cell_flowables(cell, max_width: float, default_alignment: HorizontalAlignment | None = None):
+    from reportlab.platypus import Spacer
+    from ..model import Image, RichText
+
+    flowables = []
+    for node in _iter_renderable_descendants(cell):
+        flowable = None
+        if isinstance(node, Image):
+            flowable = _image_to_flowable(node, max(max_width, 1.0))
+        elif isinstance(node, RichText):
+            flowable = _rich_text_to_paragraph(node, max(max_width, 1.0), default_alignment=default_alignment)
+        if flowable is None:
+            continue
+        if flowables:
+            flowables.append(Spacer(1, 4))
+        flowables.append(flowable)
+    return flowables or [""]
 
 
 def _resolve_table_column_widths(table, column_count: int, available_width: float) -> list[float]:
@@ -493,7 +642,7 @@ def _resolve_table_column_widths(table, column_count: int, available_width: floa
     return [equal_width] * column_count
 
 
-def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: float, start_x: float) -> float:
+def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None) -> float:
     try:
         from reportlab.lib import colors
         from reportlab.platypus import Table as FlowTable
@@ -501,19 +650,38 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("PDF export requires reportlab") from exc
 
-    rows: list[list[str]] = []
+    rows: list[list[object]] = []
     column_count = 0
-    for row in table:
-        rendered_row = [_table_cell_text(cell) for cell in row]
-        column_count = max(column_count, len(rendered_row))
-        rows.append(rendered_row)
+    contains_images = _table_contains_images(table)
+    rendered_rows = [list(row) for row in table]
+    for row in rendered_rows:
+        column_count = max(column_count, len(row))
 
-    if not rows or column_count == 0:
+    if not rendered_rows or column_count == 0:
         return cursor_y
 
-    normalized_rows = [row + [""] * (column_count - len(row)) for row in rows]
-    available_width = max(page_width - _RIGHT_MARGIN - start_x, 72.0)
+    available_width = max(_container_width(page_width, start_x, max_width), 72.0)
     column_widths = _resolve_table_column_widths(table, column_count, available_width)
+    if contains_images:
+        alignment_commands: list[tuple[str, tuple[int, int], tuple[int, int], str]] = []
+        normalized_rows = []
+        for row_index, row in enumerate(rendered_rows):
+            rendered_row = []
+            for index, cell in enumerate(row):
+                cell_width = column_widths[index] if index < len(column_widths) else (available_width / max(column_count, 1))
+                cell_alignment = _table_cell_alignment(cell)
+                rendered_row.append(_table_cell_flowables(cell, max(cell_width - 12.0, 1.0), default_alignment=cell_alignment))
+                alignment_commands.append(("ALIGN", (index, row_index), (index, row_index), _flowable_alignment_value(cell_alignment)))
+            rendered_row.extend([""] * (column_count - len(rendered_row)))
+            normalized_rows.append(rendered_row)
+    else:
+        alignment_commands = []
+        normalized_rows = []
+        for row in rendered_rows:
+            rendered_row = [_table_cell_text(cell) for cell in row]
+            rendered_row.extend([""] * (column_count - len(rendered_row)))
+            normalized_rows.append(rendered_row)
+
     grid_color = colors.Color(0.55, 0.55, 0.55)
 
     flowable = FlowTable(normalized_rows, colWidths=column_widths)
@@ -531,6 +699,7 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
                 ("TOPPADDING", (0, 0), (-1, -1), 4),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                 ("GRID", (0, 0), (-1, -1), 0.5, grid_color),
+                *alignment_commands,
             ]
         )
     )
@@ -557,21 +726,67 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
     return cursor_y - 12
 
 
-def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_height: float, start_x: float) -> float:
+def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None) -> float:
+    try:
+        from reportlab.lib.utils import ImageReader
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("PDF export requires reportlab") from exc
+
+    if not image.Bytes:
+        return cursor_y
+    if cursor_y < 180:
+        cursor_y = _show_page(pdf, page_height)
+
+    try:
+        img = ImageReader(BytesIO(bytes(image.Bytes)))
+        draw_width, draw_height = _resolve_image_draw_size(image, img, page_width, cursor_y, start_x=start_x, max_width=max_width)
+        container_width = _container_width(page_width, start_x, max_width)
+        draw_x = _aligned_x(start_x, draw_width, container_width, getattr(image, "HorizontalAlignment", None))
+        draw_y = max(_BOTTOM_MARGIN, cursor_y - draw_height)
+        pdf.drawImage(img, draw_x, draw_y, width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
+        if getattr(image, "HyperlinkUrl", None) and hasattr(pdf, "linkURL"):
+            pdf.linkURL(str(image.HyperlinkUrl), (draw_x, draw_y, draw_x + draw_width, draw_y + draw_height), relative=0)
+        return cursor_y - draw_height - 12
+    except Exception:
+        pdf.setFont(_register_font_variant("sans", False, True), 10)
+        pdf.drawString(start_x, cursor_y, image.FileName or "[image]")
+        return cursor_y - 14
+
+
+def _render_outline_content(pdf, node, cursor_y: float, page_width: float, page_height: float, start_x: float, max_width: float | None = None) -> float:
     from ..model import RichText, Table
+    from ..model import Image as NoteImage
 
     if isinstance(node, RichText):
         if _has_ancestor_of_type(node, Table):
             return cursor_y
         if not _plain_text_from_rich_text(node):
             return cursor_y
+        runs = _iter_runs(node)
+        alignment = _rich_text_alignment(node)
+        text = "".join(_sanitize_text(getattr(run, "Text", "")) for run in runs)
+        container_width = _container_width(page_width, start_x, max_width)
+        if alignment in {HorizontalAlignment.Center, HorizontalAlignment.Right} and "\n" not in text:
+            return _render_aligned_single_line_rich_text(
+                pdf,
+                runs,
+                cursor_y,
+                start_x,
+                container_width,
+                alignment,
+                default_font="Arial",
+                default_size=11.0,
+            )
         return _render_rich_text(pdf, node, cursor_y, page_width, page_height, start_x=start_x, default_font="Arial", default_size=11.0)
 
     if isinstance(node, Table):
-        return _render_table(pdf, node, cursor_y, page_width, page_height, start_x=start_x)
+        return _render_table(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width)
+
+    if isinstance(node, NoteImage):
+        return _render_image(pdf, node, cursor_y, page_width, page_height, start_x=start_x, max_width=max_width)
 
     for child in node:
-        cursor_y = _render_outline_content(pdf, child, cursor_y, page_width, page_height, start_x)
+        cursor_y = _render_outline_content(pdf, child, cursor_y, page_width, page_height, start_x, max_width=max_width)
     return cursor_y
 
 
@@ -584,7 +799,7 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
 
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer)
-    width, height = pdf._pagesize
+    width, height = getattr(pdf, "_pagesize", (612.0, 792.0))
 
     pages = list(document)
     start = max(options.PageIndex, 0)
@@ -595,60 +810,59 @@ def write_pdf(document, options: PdfSaveOptions) -> bytes:
     for index, page in enumerate(selected):
         cursor_y = height - _TOP_MARGIN
         if page is not None:
-            from ..model import Image, Outline, RichText, Table, TableCell
+            from ..model import Image, Outline, Page, RichText, Table, TableCell
+
+            current_page = cast(Page, page)
 
             title_nodes: set[int] = set()
-            if page.Title is not None:
-                if page.Title.TitleText is not None:
-                    title_nodes.add(id(page.Title.TitleText))
-                    cursor_y = _render_rich_text(pdf, page.Title.TitleText, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=14.0)
+            if current_page.Title is not None:
+                if current_page.Title.TitleText is not None:
+                    title_nodes.add(id(current_page.Title.TitleText))
+                    cursor_y = _render_rich_text(pdf, current_page.Title.TitleText, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=14.0)
 
                 meta_nodes = []
-                if page.Title.TitleDate is not None:
-                    title_nodes.add(id(page.Title.TitleDate))
-                    meta_nodes.append(page.Title.TitleDate)
-                if page.Title.TitleTime is not None:
-                    title_nodes.add(id(page.Title.TitleTime))
-                    meta_nodes.append(page.Title.TitleTime)
+                if current_page.Title.TitleDate is not None:
+                    title_nodes.add(id(current_page.Title.TitleDate))
+                    meta_nodes.append(current_page.Title.TitleDate)
+                if current_page.Title.TitleTime is not None:
+                    title_nodes.add(id(current_page.Title.TitleTime))
+                    meta_nodes.append(current_page.Title.TitleTime)
                 if meta_nodes:
                     cursor_y = _render_inline_rich_texts(pdf, meta_nodes, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=9.0)
                 cursor_y -= 14
 
             content_origin_y = cursor_y
             rendered_outline_text_ids: set[int] = set()
-            for outline in page.GetChildNodes(Outline):
-                outline_cursor_y = _outline_y_position(content_origin_y, outline)
+            next_outline_y = content_origin_y
+            for outline in current_page.GetChildNodes(Outline):
+                outline_cursor_y = min(_outline_y_position(content_origin_y, outline), next_outline_y)
                 outline_start_x = _outline_x_position(outline)
+                outline_max_width = max(float(getattr(outline, "Width", 0.0) or 0.0), 0.0) * _POINTS_PER_HALF_INCH or None
                 for rich_text in outline.GetChildNodes(RichText):
                     rendered_outline_text_ids.add(id(rich_text))
-                outline_cursor_y = _render_outline_content(pdf, outline, outline_cursor_y, width, height, outline_start_x)
+                outline_cursor_y = _render_outline_content(pdf, outline, outline_cursor_y, width, height, outline_start_x, max_width=outline_max_width)
+                next_outline_y = outline_cursor_y - 8
 
-            for rich_text in page.GetChildNodes(RichText):
+            cursor_y = min(cursor_y, next_outline_y)
+
+            for rich_text in current_page.GetChildNodes(RichText):
                 if id(rich_text) in title_nodes or id(rich_text) in rendered_outline_text_ids or _has_ancestor_of_type(rich_text, TableCell) or _has_ancestor_of_type(rich_text, Outline):
                     continue
                 if not _plain_text_from_rich_text(rich_text):
                     continue
                 cursor_y = _render_rich_text(pdf, rich_text, cursor_y, width, height, start_x=_LEFT_MARGIN, default_font="Arial", default_size=11.0)
 
-            for table in page.GetChildNodes(Table):
+            for table in current_page.GetChildNodes(Table):
                 if _has_ancestor_of_type(table, Outline):
                     continue
                 cursor_y = _render_table(pdf, table, cursor_y, width, height, start_x=_LEFT_MARGIN)
 
-            for image in page.GetChildNodes(Image):
+            for image in current_page.GetChildNodes(Image):
+                if _has_ancestor_of_type(image, Outline):
+                    continue
                 if not image.Bytes:
                     continue
-                if cursor_y < 180:
-                    cursor_y = _show_page(pdf, height)
-                try:
-                    img = ImageReader(BytesIO(bytes(image.Bytes)))
-                    draw_width, draw_height = _resolve_image_draw_size(image, img, width, cursor_y)
-                    pdf.drawImage(img, _LEFT_MARGIN, max(_BOTTOM_MARGIN, cursor_y - draw_height), width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
-                    cursor_y -= draw_height + 12
-                except Exception:
-                    pdf.setFont(_register_font_variant("sans", False, True), 10)
-                    pdf.drawString(_LEFT_MARGIN, cursor_y, image.FileName or "[image]")
-                    cursor_y -= 14
+                cursor_y = _render_image(pdf, image, cursor_y, width, height, start_x=_LEFT_MARGIN)
 
             if index != len(selected) - 1:
                 pdf.showPage()

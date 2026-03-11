@@ -7,7 +7,7 @@ from io import BufferedIOBase, BytesIO
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, TypeVar
 
-from .enums import FileFormat, SaveFormat
+from .enums import FileFormat, HorizontalAlignment, SaveFormat
 from .exceptions import IncorrectPasswordException, UnsupportedSaveFormatException
 from .saving.options import HtmlSaveOptions, ImageSaveOptions, OneSaveOptions, PdfSaveOptions, SaveOptions
 
@@ -171,6 +171,7 @@ class NoteTag(Node):
 class TextStyle(Node):
     IsHyperlink: bool = False
     HyperlinkAddress: str | None = None
+    HorizontalAlignment: HorizontalAlignment | None = None
     FontName: str | None = None
     FontSize: float | None = None
     FontColor: int | None = None
@@ -269,6 +270,7 @@ class Image(CompositeNode):
     Bytes: bytes = b""
     Width: float | None = None
     Height: float | None = None
+    HorizontalAlignment: HorizontalAlignment | None = None
     AlternativeTextTitle: str | None = None
     AlternativeTextDescription: str | None = None
     HyperlinkUrl: str | None = None
@@ -279,6 +281,7 @@ class Image(CompositeNode):
         self.Bytes = image.Bytes
         self.Width = image.Width
         self.Height = image.Height
+        self.HorizontalAlignment = image.HorizontalAlignment
         self.AlternativeTextTitle = image.AlternativeTextTitle
         self.AlternativeTextDescription = image.AlternativeTextDescription
         self.HyperlinkUrl = image.HyperlinkUrl

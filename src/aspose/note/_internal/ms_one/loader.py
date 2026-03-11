@@ -7,6 +7,7 @@ import re
 import struct
 
 from ..onestore.parser import ExtendedGUID, OneStoreFile, OneStoreObject, parse_onestore_file
+from ...enums import HorizontalAlignment
 from .entities import LogicalDocument, LogicalNode
 from ...model import (
     AttachedFile,
@@ -87,6 +88,29 @@ def _bytes_to_float_list(value: Any) -> list[float]:
     for offset in range(0, len(value) - (len(value) % 4), 4):
         result.append(struct.unpack("<f", value[offset : offset + 4])[0])
     return result
+
+
+def _decode_paragraph_alignment(value: Any) -> HorizontalAlignment | None:
+    if not isinstance(value, int):
+        return None
+    return {
+        0: HorizontalAlignment.Left,
+        1: HorizontalAlignment.Center,
+        2: HorizontalAlignment.Right,
+    }.get(value)
+
+
+def _decode_layout_alignment(value: Any) -> HorizontalAlignment | None:
+    if not isinstance(value, int) or value == 0:
+        return None
+    horizontal_alignment = value & 0x7
+    return {
+        1: HorizontalAlignment.Left,
+        2: HorizontalAlignment.Center,
+        3: HorizontalAlignment.Right,
+        4: HorizontalAlignment.Left,
+        5: HorizontalAlignment.Right,
+    }.get(horizontal_alignment)
 
 
 def _flatten_refs(value: Any) -> list[ExtendedGUID]:
@@ -366,6 +390,7 @@ class _Builder:
         return TextStyle(
             IsHyperlink=bool(resolved.get("Hyperlink") or resolved.get("WzHyperlinkUrl")),
             HyperlinkAddress=_decode_utf16(resolved.get("WzHyperlinkUrl")),
+            HorizontalAlignment=_decode_paragraph_alignment(resolved.get("ParagraphAlignment")),
             FontName=_decode_utf16(resolved.get("Font")),
             FontSize=(float(resolved["FontSize"]) / 2.0) if isinstance(resolved.get("FontSize"), int) else None,
             FontColor=resolved.get("FontColor") if isinstance(resolved.get("FontColor"), int) else None,
@@ -436,6 +461,8 @@ class _Builder:
             Bytes=self._resolve_file_bytes(record, "PictureContainer") or self._resolve_file_bytes(record, "WebPictureContainer14"),
             Width=_u32_to_float(record.properties.get("PictureWidth")),
             Height=_u32_to_float(record.properties.get("PictureHeight")),
+            HorizontalAlignment=_decode_layout_alignment(record.properties.get("LayoutAlignmentSelf"))
+            or _decode_layout_alignment(record.properties.get("LayoutAlignmentInParent")),
             AlternativeTextDescription=_decode_utf16(record.properties.get("ImageAltText")),
             HyperlinkUrl=_decode_utf16(record.properties.get("WzHyperlinkUrl")),
             Tags=self._collect_tags(record),
