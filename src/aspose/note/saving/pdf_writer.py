@@ -182,6 +182,8 @@ def _use_system_fonts() -> bool:
 def _text_requires_unicode_font(text: str) -> bool:
     for char in text:
         codepoint = ord(char)
+        if codepoint > 0x00FF:
+            return True
         if 0x0400 <= codepoint <= 0x052F:
             return True
         if 0x2DE0 <= codepoint <= 0x2DFF:
@@ -1185,6 +1187,111 @@ def _table_cell_text(cell) -> str:
     return "\n".join(text for text in texts if text)
 
 
+def _inline_tag_text(tag) -> str:
+    shape = getattr(tag, "shape", None)
+    if shape in _CHECKBOX_SHAPES:
+        return "☐"
+    symbol, textual = _tag_symbol(tag)
+    return symbol if not textual else symbol.strip()
+
+
+def _inline_tag_prefix(tags) -> str:
+    parts = [_inline_tag_text(tag) for tag in reversed(_dedupe_tags(tags))]
+    parts = [part for part in parts if part]
+    return "".join(parts)
+
+
+def _paragraph_font_name_for_text(text: str, *, bold: bool = False, italic: bool = False) -> str:
+    return _register_font_variant("sans", bold, italic, require_unicode=_text_requires_unicode_font(text))
+
+
+def _paragraph_for_table_text(text: str, max_width: float, *, left_indent: float = 0.0, default_alignment: HorizontalAlignment | None = None, font_size: float = 11.0, leading: float = 13.0):
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph
+
+    escaped_text = escape(text).replace("\n", "<br/>")
+    style = ParagraphStyle(
+        name="AsposeNoteStructuredTableCell",
+        fontName=_paragraph_font_name_for_text(text),
+        fontSize=font_size,
+        leading=leading,
+        alignment=_paragraph_alignment_value(default_alignment),
+        leftIndent=max(left_indent, 0.0),
+        wordWrap="CJK",
+    )
+    paragraph = Paragraph(escaped_text, style)
+    paragraph.width = max_width
+    return paragraph
+
+
+def _table_outline_prefix_width(tags, marker_text: str, font_size: float) -> float:
+    width = _tag_block_width(None, tags, None)
+    if marker_text:
+        try:
+            from reportlab.pdfbase import pdfmetrics
+
+            marker_font = _register_font_variant("sans", False, False, require_unicode=_text_requires_unicode_font(marker_text))
+            marker_width = pdfmetrics.stringWidth(marker_text, marker_font, font_size)
+        except Exception:
+            marker_width = len(marker_text) * font_size * 0.55
+        width += max(marker_width, _OUTLINE_MARKER_MIN_WIDTH - 2.0) + 3.0
+    return width
+
+
+def _centered_tag_baseline(top_y: float, block_height: float, icon_size: float) -> float:
+    center_y = top_y - (block_height / 2.0)
+    return center_y - (icon_size * 0.42)
+
+
+def _table_outline_item_flowable(text: str, tags, marker_text: str, max_width: float, indent: float, default_alignment: HorizontalAlignment | None = None, font_size: float = 9.0, leading: float = 11.0):
+    from reportlab.platypus import Flowable, Table as FlowTable, TableStyle
+
+    class OutlinePrefixFlowable(Flowable):
+        def __init__(self) -> None:
+            super().__init__()
+            self.width = indent + _table_outline_prefix_width(tags, marker_text, font_size)
+            self.height = max(leading, _normalize_tag_icon_size(None) + 2.0)
+
+        def wrap(self, aW, aH):
+            return min(self.width, aW), self.height
+
+        def draw(self):
+            x = indent
+            baseline_y = max(font_size * 0.15, _normalize_tag_icon_size(None) * 0.18)
+            if tags:
+                _render_note_tags(self.canv, tags, x, baseline_y, None)
+                x += _tag_block_width(self.canv, tags, None)
+            if marker_text:
+                marker_font = _register_font_variant("sans", False, False, require_unicode=_text_requires_unicode_font(marker_text))
+                self.canv.setFont(marker_font, font_size)
+                _set_fill_color(self.canv, (0.0, 0.0, 0.0))
+                self.canv.drawString(x, baseline_y, marker_text)
+
+    prefix = OutlinePrefixFlowable()
+    prefix_width = min(prefix.width, max(max_width * 0.45, prefix.width))
+    text_width = max(max_width - prefix.width, 1.0)
+    paragraph = _paragraph_for_table_text(
+        text,
+        text_width,
+        default_alignment=default_alignment,
+        font_size=font_size,
+        leading=leading,
+    )
+    flowable = FlowTable([[prefix, paragraph]], colWidths=[prefix_width, text_width])
+    flowable.setStyle(
+        TableStyle(
+            [
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    return flowable
+
+
 def _iter_renderable_descendants(node):
     from ..model import AttachedFile, Image, RichText
 
@@ -1308,19 +1415,65 @@ def _table_cell_alignment(cell) -> HorizontalAlignment | None:
     return None
 
 
-def _table_cell_flowables(cell, max_width: float, default_alignment: HorizontalAlignment | None = None):
+def _table_outline_flowables(node, max_width: float, default_alignment: HorizontalAlignment | None = None, *, depth: int = 0, list_state: dict[tuple[int, str], int] | None = None):
     from reportlab.platypus import Spacer
-    from ..model import AttachedFile, Image, RichText
+    from ..model import AttachedFile, Image, OutlineElement, RichText
+
+    if list_state is None:
+        list_state = {}
 
     flowables = []
-    for node in _iter_renderable_descendants(cell):
-        flowable = None
-        if isinstance(node, Image):
-            flowable = _image_to_flowable(node, max(max_width, 1.0))
-        elif isinstance(node, AttachedFile):
+    for child in node:
+        if isinstance(child, OutlineElement):
+            child_flowables = _table_outline_flowables(
+                child,
+                max_width,
+                default_alignment,
+                depth=depth + 1,
+                list_state=list_state,
+            )
+            for child_flowable in child_flowables:
+                if flowables and not isinstance(child_flowable, Spacer):
+                    flowables.append(Spacer(1, 2))
+                flowables.append(child_flowable)
+            continue
+
+        if isinstance(child, RichText):
+            text = _plain_text_from_rich_text(child)
+            if not text:
+                continue
+            tags = _tags_for_node(child)
+            marker_text = ""
+            parent_outline = getattr(child, "ParentNode", None)
+            if isinstance(parent_outline, OutlineElement) and getattr(parent_outline, "NumberList", None) is not None:
+                marker_text = _resolve_list_marker_text(parent_outline.NumberList, max(depth - 1, 0), list_state)
+            paragraph = _table_outline_item_flowable(
+                text,
+                tags,
+                marker_text,
+                max(max_width, 1.0),
+                max(depth - 1, 0) * (_OUTLINE_LEVEL_INDENT * 0.8),
+                default_alignment=default_alignment or _rich_text_alignment(child),
+                font_size=9.0,
+                leading=11.0,
+            )
+            if flowables:
+                flowables.append(Spacer(1, 2))
+            flowables.append(paragraph)
+            continue
+
+        if isinstance(child, Image):
+            flowable = _image_to_flowable(child, max(max_width, 1.0))
+            if flowable is not None:
+                if flowables:
+                    flowables.append(Spacer(1, 4))
+                flowables.append(flowable)
+            continue
+
+        if isinstance(child, AttachedFile):
             attachment_flowables = [
-                _attached_file_name_to_paragraph(node, max(max_width, 1.0), default_alignment=default_alignment),
-                _attached_file_to_flowable(node, max(max_width, 1.0), default_alignment=default_alignment),
+                _attached_file_name_to_paragraph(child, max(max_width, 1.0), default_alignment=default_alignment),
+                _attached_file_to_flowable(child, max(max_width, 1.0), default_alignment=default_alignment),
             ]
             for attachment_flowable in attachment_flowables:
                 if attachment_flowable is None:
@@ -1329,14 +1482,39 @@ def _table_cell_flowables(cell, max_width: float, default_alignment: HorizontalA
                     flowables.append(Spacer(1, 4))
                 flowables.append(attachment_flowable)
             continue
-        elif isinstance(node, RichText):
-            flowable = _rich_text_to_paragraph(node, max(max_width, 1.0), default_alignment=default_alignment)
-        if flowable is None:
-            continue
-        if flowables:
-            flowables.append(Spacer(1, 4))
-        flowables.append(flowable)
-    return flowables or [""]
+
+        nested_flowables = _table_outline_flowables(
+            child,
+            max_width,
+            default_alignment,
+            depth=depth,
+            list_state=list_state,
+        )
+        for nested_flowable in nested_flowables:
+            if flowables and not isinstance(nested_flowable, Spacer):
+                flowables.append(Spacer(1, 2))
+            flowables.append(nested_flowable)
+
+    return flowables
+
+
+def _table_cell_flowables(cell, max_width: float, default_alignment: HorizontalAlignment | None = None):
+    from reportlab.platypus import Spacer
+
+    flowables = _table_outline_flowables(cell, max_width, default_alignment, depth=0, list_state={})
+    if flowables:
+        return flowables
+
+    fallback_flowables = []
+    for node in _iter_renderable_descendants(cell):
+        if getattr(node, "Text", None):
+            paragraph = _paragraph_for_table_text(
+                _plain_text_from_rich_text(node),
+                max(max_width, 1.0),
+                default_alignment=default_alignment,
+            )
+            fallback_flowables.append(paragraph)
+    return fallback_flowables or [Spacer(1, 1)]
 
 
 def _resolve_table_column_widths(table, column_count: int, available_width: float) -> list[float]:
@@ -1372,34 +1550,27 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
     if not rendered_rows or column_count == 0:
         return cursor_y
 
-    tag_offset = _tag_block_width(pdf, _tags_for_node(table), options)
+    table_tags = _tags_for_node(table)
+    tag_offset = _tag_block_width(pdf, table_tags, options)
+    tag_x = start_x
     if tag_offset:
-        _render_note_tags(pdf, _tags_for_node(table), start_x, cursor_y, options)
         start_x += tag_offset
         if max_width is not None:
             max_width = max(max_width - tag_offset, 1.0)
 
     available_width = max(_container_width(page_width, start_x, max_width), 72.0)
     column_widths = _resolve_table_column_widths(table, column_count, available_width)
-    if contains_images:
-        alignment_commands: list[tuple[str, tuple[int, int], tuple[int, int], str]] = []
-        normalized_rows = []
-        for row_index, row in enumerate(rendered_rows):
-            rendered_row = []
-            for index, cell in enumerate(row):
-                cell_width = column_widths[index] if index < len(column_widths) else (available_width / max(column_count, 1))
-                cell_alignment = _table_cell_alignment(cell)
-                rendered_row.append(_table_cell_flowables(cell, max(cell_width - 12.0, 1.0), default_alignment=cell_alignment))
-                alignment_commands.append(("ALIGN", (index, row_index), (index, row_index), _flowable_alignment_value(cell_alignment)))
-            rendered_row.extend([""] * (column_count - len(rendered_row)))
-            normalized_rows.append(rendered_row)
-    else:
-        alignment_commands = []
-        normalized_rows = []
-        for row in rendered_rows:
-            rendered_row = [_table_cell_text(cell) for cell in row]
-            rendered_row.extend([""] * (column_count - len(rendered_row)))
-            normalized_rows.append(rendered_row)
+    alignment_commands: list[tuple[str, tuple[int, int], tuple[int, int], str]] = []
+    normalized_rows = []
+    for row_index, row in enumerate(rendered_rows):
+        rendered_row = []
+        for index, cell in enumerate(row):
+            cell_width = column_widths[index] if index < len(column_widths) else (available_width / max(column_count, 1))
+            cell_alignment = _table_cell_alignment(cell)
+            rendered_row.append(_table_cell_flowables(cell, max(cell_width - 12.0, 1.0), default_alignment=cell_alignment))
+            alignment_commands.append(("ALIGN", (index, row_index), (index, row_index), _flowable_alignment_value(cell_alignment)))
+        rendered_row.extend([""] * (column_count - len(rendered_row)))
+        normalized_rows.append(rendered_row)
 
     grid_color = colors.Color(0.55, 0.55, 0.55)
 
@@ -1424,12 +1595,22 @@ def _render_table(pdf, table, cursor_y: float, page_width: float, page_height: f
     )
 
     pending_parts = [flowable]
+    drew_table_tags = False
     while pending_parts:
         current_part = pending_parts.pop(0)
         available_height = max(cursor_y - _BOTTOM_MARGIN, 1.0)
         _, height_used = current_part.wrapOn(pdf, available_width, available_height)
         if height_used <= available_height:
             current_part.drawOn(pdf, start_x, cursor_y - height_used)
+            if tag_offset and not drew_table_tags:
+                _render_note_tags(
+                    pdf,
+                    table_tags,
+                    tag_x,
+                    _centered_tag_baseline(cursor_y, height_used, _normalize_tag_icon_size(options)),
+                    options,
+                )
+                drew_table_tags = True
             cursor_y -= height_used
             if pending_parts:
                 cursor_y = _show_page(pdf, page_height)
@@ -1456,9 +1637,10 @@ def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: f
     if cursor_y < 180:
         cursor_y = _show_page(pdf, page_height)
 
-    tag_offset = _tag_block_width(pdf, _tags_for_node(image), options)
+    image_tags = _tags_for_node(image)
+    tag_offset = _tag_block_width(pdf, image_tags, options)
+    tag_x = start_x
     if tag_offset:
-        _render_note_tags(pdf, _tags_for_node(image), start_x, cursor_y, options)
         start_x += tag_offset
         if max_width is not None:
             max_width = max(max_width - tag_offset, 1.0)
@@ -1470,6 +1652,14 @@ def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: f
         draw_x = _aligned_x(start_x, draw_width, container_width, getattr(image, "HorizontalAlignment", None))
         draw_y = max(_BOTTOM_MARGIN, cursor_y - draw_height)
         pdf.drawImage(img, draw_x, draw_y, width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
+        if tag_offset:
+            _render_note_tags(
+                pdf,
+                image_tags,
+                tag_x,
+                _centered_tag_baseline(cursor_y, draw_height, _normalize_tag_icon_size(options)),
+                options,
+            )
         if getattr(image, "HyperlinkUrl", None) and hasattr(pdf, "linkURL"):
             pdf.linkURL(str(image.HyperlinkUrl), (draw_x, draw_y, draw_x + draw_width, draw_y + draw_height), relative=0)
         return cursor_y - draw_height - 12

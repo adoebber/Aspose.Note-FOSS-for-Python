@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,7 +23,7 @@ if str(SRC) not in sys.path:
 GOLDENS_DIR = ROOT / "tests" / "goldens" / "pdf"
 FAILURES_DIR = ROOT / "tests" / "out" / "pdf_golden_failures"
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 try:
     from pypdf import PdfReader
@@ -149,6 +151,71 @@ def _image_count(page) -> int:
     return count
 
 
+def _normalize_layout_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return str(value)
+    rounded = round(number, 2)
+    if abs(rounded) < 0.005:
+        rounded = 0.0
+    text = f"{rounded:.2f}"
+    return text.rstrip("0").rstrip(".") or "0"
+
+
+def _normalize_layout_operand(value: Any, name_map: dict[str, str]) -> Any:
+    if isinstance(value, (list, tuple)):
+        return [_normalize_layout_operand(item, name_map) for item in value]
+    if isinstance(value, str):
+        return "<str>"
+    if hasattr(value, "items"):
+        return "<dict>"
+
+    text = str(value)
+    if text.startswith("/"):
+        token = name_map.get(text)
+        if token is None:
+            token = f"N{len(name_map) + 1}"
+            name_map[text] = token
+        return token
+
+    try:
+        return _normalize_layout_number(value)
+    except Exception:
+        return text
+
+
+def _layout_operations(page, reader) -> list[str]:
+    try:
+        from pypdf.generic import ContentStream
+    except Exception:
+        return []
+
+    try:
+        content = ContentStream(page.get_contents(), reader)
+    except Exception:
+        return []
+
+    name_map: dict[str, str] = {}
+    operations: list[str] = []
+    for operands, operator in content.operations:
+        operator_text = operator.decode("latin-1") if isinstance(operator, bytes) else str(operator)
+        normalized_operands = [_normalize_layout_operand(operand, name_map) for operand in operands]
+        pieces = [operator_text]
+        for operand in normalized_operands:
+            if isinstance(operand, list):
+                pieces.append("[" + ", ".join(str(item) for item in operand) + "]")
+            else:
+                pieces.append(str(operand))
+        operations.append(" ".join(pieces))
+    return operations
+
+
+def _layout_digest(layout_ops: list[str]) -> str:
+    payload = "\n".join(layout_ops).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def build_pdf_manifest(pdf_path: Path, fixture_name: str | None = None) -> dict[str, Any]:
     if not HAS_PYPDF:
         raise RuntimeError("PDF golden tests require pypdf")
@@ -157,12 +224,15 @@ def build_pdf_manifest(pdf_path: Path, fixture_name: str | None = None) -> dict[
     pages: list[dict[str, Any]] = []
     for index, page in enumerate(reader.pages):
         extracted_text = page.extract_text() or ""
+        layout_ops = _layout_operations(page, reader)
         pages.append(
             {
                 "index": index,
                 "text": normalize_text(extracted_text),
                 "links": _annotation_links(page),
                 "image_count": _image_count(page),
+                "layout_digest": _layout_digest(layout_ops),
+                "layout_ops": layout_ops,
             }
         )
 
@@ -229,9 +299,7 @@ def create_visual_diff_artifacts(case_id: str, expected_pdf: Path, generated_pdf
     if not visual_diff_available():
         return []
 
-    case_dir = FAILURES_DIR / case_id / "visual"
-    if case_dir.exists():
-        shutil.rmtree(case_dir)
+    case_dir = FAILURES_DIR / case_id / "visual" / uuid.uuid4().hex[:8]
     baseline_dir = case_dir / "baseline"
     generated_dir = case_dir / "generated"
     diff_dir = case_dir / "diff"
