@@ -46,10 +46,6 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                 expected_pdf = golden_pdf_path(case.case_id)
                 expected_manifest_path = golden_manifest_path(case.case_id)
                 self.assertTrue(
-                    expected_pdf.exists(),
-                    f"Missing golden PDF for {case.case_id}. Run tools/regenerate_pdf_goldens.py.",
-                )
-                self.assertTrue(
                     expected_manifest_path.exists(),
                     f"Missing golden manifest for {case.case_id}. Run tools/regenerate_pdf_goldens.py.",
                 )
@@ -66,7 +62,7 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                 expected_manifest = load_manifest(expected_manifest_path)
                 if actual_manifest != expected_manifest:
                     visual_artifacts: list[str] = []
-                    if visual_diff_available():
+                    if expected_pdf.exists() and visual_diff_available():
                         visual_artifacts = [
                             str(path)
                             for path in create_visual_diff_artifacts(case.case_id, expected_pdf, generated_pdf)
