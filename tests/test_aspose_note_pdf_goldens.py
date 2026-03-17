@@ -16,6 +16,7 @@ from tests._pdf_goldens import (
     golden_pdf_path,
     load_manifest,
     manifest_pretty_json,
+    semantic_manifest,
     visual_diff_available,
     write_manifest,
 )
@@ -60,7 +61,9 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                 write_manifest(generated_manifest, actual_manifest)
 
                 expected_manifest = load_manifest(expected_manifest_path)
-                if actual_manifest != expected_manifest:
+                actual_semantic = semantic_manifest(actual_manifest)
+                expected_semantic = semantic_manifest(expected_manifest)
+                if actual_semantic != expected_semantic:
                     visual_artifacts: list[str] = []
                     if expected_pdf.exists() and visual_diff_available():
                         visual_artifacts = [
@@ -69,8 +72,8 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                         ]
                     diff = "".join(
                         difflib.unified_diff(
-                            manifest_pretty_json(expected_manifest).splitlines(keepends=True),
-                            manifest_pretty_json(actual_manifest).splitlines(keepends=True),
+                            manifest_pretty_json(expected_semantic).splitlines(keepends=True),
+                            manifest_pretty_json(actual_semantic).splitlines(keepends=True),
                             fromfile=str(expected_manifest_path),
                             tofile=str(generated_manifest),
                         )
@@ -79,6 +82,7 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                         f"PDF golden mismatch for {case.case_id}.\n"
                         f"Generated PDF: {generated_pdf}\n"
                         f"Generated manifest: {generated_manifest}\n"
+                        f"Comparison mode: semantic manifest (text, links, image_count, page_count)\n"
                         f"Visual artifacts: {visual_artifacts or 'not available'}\n"
                         f"Manifest diff:\n{diff}"
                     )

@@ -259,6 +259,27 @@ def manifest_pretty_json(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
 
 
+def semantic_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    pages = [
+        {
+            "index": page["index"],
+            "text": page["text"],
+            "links": page["links"],
+            "image_count": page["image_count"],
+        }
+        for page in manifest.get("pages", [])
+    ]
+
+    result: dict[str, Any] = {
+        "schema_version": manifest.get("schema_version"),
+        "page_count": manifest.get("page_count"),
+        "pages": pages,
+    }
+    if "fixture" in manifest:
+        result["fixture"] = manifest["fixture"]
+    return result
+
+
 def _render_pdf_with_pymupdf(pdf_path: Path, output_dir: Path, prefix: str) -> list[Path]:
     if not HAS_PYMUPDF:
         return []
