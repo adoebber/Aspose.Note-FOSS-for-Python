@@ -420,10 +420,15 @@ class _Builder:
     def _build_richtext(self, node: LogicalNode) -> RichText:
         record = self.objects[node.oid]
         text = _decode_utf16(record.properties.get("RichEditTextUnicode")) or _decode_ascii_text(record.properties.get("TextExtendedAscii")) or ""
-        rich_text = RichText(Text=text, FontSize=(float(record.properties["FontSize"]) / 2.0) if isinstance(record.properties.get("FontSize"), int) else None, Tags=self._collect_tags(record))
+        base_style = self._style_from_properties(record.properties)
+        rich_text = RichText(
+            Text=text,
+            ParagraphStyle=base_style,
+            FontSize=(float(record.properties["FontSize"]) / 2.0) if isinstance(record.properties.get("FontSize"), int) else None,
+            Tags=self._collect_tags(record),
+        )
 
         run_styles_raw = record.properties.get("TextRunFormatting")
-        base_style = self._style_from_properties(record.properties)
 
         if isinstance(run_styles_raw, list) and run_styles_raw:
             boundaries = self._decode_run_boundaries(record.properties.get("TextRunIndex"), len(run_styles_raw), len(text))
@@ -456,11 +461,15 @@ class _Builder:
 
     def _build_image(self, node: LogicalNode) -> Image:
         record = self.objects[node.oid]
+        width = _u32_to_float(record.properties.get("PictureWidth"))
+        height = _u32_to_float(record.properties.get("PictureHeight"))
         image = Image(
             FileName=_decode_utf16(record.properties.get("ImageFilename")),
             Bytes=self._resolve_file_bytes(record, "PictureContainer") or self._resolve_file_bytes(record, "WebPictureContainer14"),
-            Width=_u32_to_float(record.properties.get("PictureWidth")),
-            Height=_u32_to_float(record.properties.get("PictureHeight")),
+            Width=width,
+            Height=height,
+            OriginalWidth=width,
+            OriginalHeight=height,
             HorizontalAlignment=_decode_layout_alignment(record.properties.get("LayoutAlignmentSelf"))
             or _decode_layout_alignment(record.properties.get("LayoutAlignmentInParent")),
             AlternativeTextDescription=_decode_utf16(record.properties.get("ImageAltText")),

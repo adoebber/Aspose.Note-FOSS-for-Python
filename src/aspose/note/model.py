@@ -9,9 +9,17 @@ from typing import Any, BinaryIO, Iterator, TypeVar
 
 from .enums import FileFormat, HorizontalAlignment, SaveFormat
 from .exceptions import IncorrectPasswordException, UnsupportedSaveFormatException
-from .saving.options import HtmlSaveOptions, ImageSaveOptions, OneSaveOptions, PdfSaveOptions, SaveOptions
+from .saving.options import PdfSaveOptions, SaveOptions
 
 TNode = TypeVar("TNode", bound="Node")
+
+
+class _classproperty:  # noqa: N801
+    def __init__(self, getter):
+        self._getter = getter
+
+    def __get__(self, instance, owner):
+        return self._getter(owner)
 
 
 def _time32_to_datetime(value: int | None) -> datetime | None:
@@ -184,6 +192,86 @@ class TextStyle(Node):
     Superscript: bool = False
     Subscript: bool = False
 
+    @property
+    def IsBold(self) -> bool:  # noqa: N802
+        return self.Bold
+
+    @IsBold.setter
+    def IsBold(self, value: bool) -> None:  # noqa: N802
+        self.Bold = bool(value)
+
+    @property
+    def IsItalic(self) -> bool:  # noqa: N802
+        return self.Italic
+
+    @IsItalic.setter
+    def IsItalic(self, value: bool) -> None:  # noqa: N802
+        self.Italic = bool(value)
+
+    @property
+    def IsUnderline(self) -> bool:  # noqa: N802
+        return self.Underline
+
+    @IsUnderline.setter
+    def IsUnderline(self, value: bool) -> None:  # noqa: N802
+        self.Underline = bool(value)
+
+    @property
+    def IsStrikethrough(self) -> bool:  # noqa: N802
+        return self.Strikethrough
+
+    @IsStrikethrough.setter
+    def IsStrikethrough(self, value: bool) -> None:  # noqa: N802
+        self.Strikethrough = bool(value)
+
+    @property
+    def IsSuperscript(self) -> bool:  # noqa: N802
+        return self.Superscript
+
+    @IsSuperscript.setter
+    def IsSuperscript(self, value: bool) -> None:  # noqa: N802
+        self.Superscript = bool(value)
+
+    @property
+    def IsSubscript(self) -> bool:  # noqa: N802
+        return self.Subscript
+
+    @IsSubscript.setter
+    def IsSubscript(self, value: bool) -> None:  # noqa: N802
+        self.Subscript = bool(value)
+
+    @property
+    def Highlight(self) -> int | None:  # noqa: N802
+        return self.HighlightColor
+
+    @Highlight.setter
+    def Highlight(self, value: int | None) -> None:  # noqa: N802
+        self.HighlightColor = value
+
+    @property
+    def Language(self) -> int | None:  # noqa: N802
+        return self.LanguageId
+
+    @Language.setter
+    def Language(self, value: int | None) -> None:  # noqa: N802
+        self.LanguageId = value
+
+    @_classproperty
+    def Default(cls) -> TextStyle:  # noqa: N802
+        return cls(LanguageId=1033)
+
+    @_classproperty
+    def DefaultMsOneNoteTitleTextStyle(cls) -> TextStyle:  # noqa: N802
+        return cls(FontSize=20.0, Bold=True, LanguageId=1033)
+
+    @_classproperty
+    def DefaultMsOneNoteTitleDateStyle(cls) -> TextStyle:  # noqa: N802
+        return cls(FontSize=11.0, LanguageId=1033)
+
+    @_classproperty
+    def DefaultMsOneNoteTitleTimeStyle(cls) -> TextStyle:  # noqa: N802
+        return cls(FontSize=11.0, LanguageId=1033)
+
 
 @dataclass(slots=True)
 class TextRun(Node):
@@ -197,7 +285,12 @@ class TextRun(Node):
 class RichText(CompositeNode):
     Text: str = ""
     Runs: list[TextRun] = field(default_factory=list)
+    ParagraphStyle: TextStyle = field(default_factory=TextStyle)
     FontSize: float | None = None
+    LastModifiedTime: datetime | None = None
+    SpaceBefore: float | None = None
+    SpaceAfter: float | None = None
+    LineSpacing: float | None = None
     Tags: list[NoteTag] = field(default_factory=list)
 
     def Append(self, text: str, style: TextStyle | None = None) -> RichText:  # noqa: N802
@@ -206,10 +299,102 @@ class RichText(CompositeNode):
         self.Runs.append(TextRun(Text=text, Style=style or TextStyle(), Start=start, End=len(self.Text)))
         return self
 
-    def Replace(self, old_value: str, new_value: str) -> None:  # noqa: N802
-        self.Text = self.Text.replace(old_value, new_value)
+    @property
+    def TextRuns(self) -> list[TextRun]:  # noqa: N802
+        return self.Runs
+
+    @property
+    def Length(self) -> int:  # noqa: N802
+        return len(self.Text)
+
+    @property
+    def Alignment(self) -> HorizontalAlignment | None:  # noqa: N802
+        if self.ParagraphStyle.HorizontalAlignment is not None:
+            return self.ParagraphStyle.HorizontalAlignment
+        for run in self.Runs:
+            if run.Style.HorizontalAlignment is not None:
+                return run.Style.HorizontalAlignment
+        return None
+
+    @Alignment.setter
+    def Alignment(self, value: HorizontalAlignment | None) -> None:  # noqa: N802
+        self.ParagraphStyle.HorizontalAlignment = value
+        for run in self.Runs:
+            if run.Style.HorizontalAlignment is None:
+                run.Style.HorizontalAlignment = value
+
+    @property
+    def IsTitleText(self) -> bool:  # noqa: N802
+        return bool(isinstance(self.ParentNode, Title) and self.ParentNode.TitleText is self)
+
+    @property
+    def IsTitleDate(self) -> bool:  # noqa: N802
+        return bool(isinstance(self.ParentNode, Title) and self.ParentNode.TitleDate is self)
+
+    @property
+    def IsTitleTime(self) -> bool:  # noqa: N802
+        return bool(isinstance(self.ParentNode, Title) and self.ParentNode.TitleTime is self)
+
+    def AppendFront(self, text: str, style: TextStyle | None = None) -> RichText:  # noqa: N802
+        self.Insert(0, text, style)
+        return self
+
+    def Clear(self) -> RichText:  # noqa: N802
+        self.Text = ""
+        self.Runs = []
+        return self
+
+    def GetEnumerator(self) -> Iterator[str]:  # noqa: N802
+        return iter(self.Text)
+
+    def Insert(self, index: int, text: str, style: TextStyle | None = None) -> RichText:  # noqa: N802
+        index = max(0, min(index, len(self.Text)))
+        self.Text = self.Text[:index] + text + self.Text[index:]
+        effective_style = style or (self.Runs[0].Style if self.Runs else TextStyle())
+        if self.Text:
+            self.Runs = [TextRun(Text=self.Text, Style=effective_style, Start=0, End=len(self.Text))]
+        else:
+            self.Runs = []
+        return self
+
+    def Remove(self, start: int, count: int | None = None) -> RichText:  # noqa: N802
+        start = max(0, min(start, len(self.Text)))
+        end = len(self.Text) if count is None else max(start, min(start + count, len(self.Text)))
+        self.Text = self.Text[:start] + self.Text[end:]
         if self.Runs:
-            self.Runs = [TextRun(Text=self.Text, Style=self.Runs[0].Style, Start=0, End=len(self.Text))]
+            self.Runs = [TextRun(Text=self.Text, Style=self.Runs[0].Style, Start=0, End=len(self.Text))] if self.Text else []
+        return self
+
+    def Replace(self, old_value: str, new_value: str, style: TextStyle | None = None) -> RichText:  # noqa: N802
+        if old_value is None or new_value is None:
+            raise ValueError("old_value and new_value must not be None")
+        if old_value == "":
+            raise ValueError("old_value must not be empty")
+        self.Text = self.Text.replace(old_value, new_value)
+        effective_style = style or (self.Runs[0].Style if self.Runs else TextStyle())
+        if self.Runs:
+            self.Runs = [TextRun(Text=self.Text, Style=effective_style, Start=0, End=len(self.Text))] if self.Text else []
+        elif self.Text:
+            self.Runs = [TextRun(Text=self.Text, Style=effective_style, Start=0, End=len(self.Text))]
+        return self
+
+    def Trim(self) -> RichText:  # noqa: N802
+        trimmed = self.Text.strip()
+        if trimmed == self.Text:
+            return self
+        return self.Replace(self.Text, trimmed)
+
+    def TrimStart(self) -> RichText:  # noqa: N802
+        trimmed = self.Text.lstrip()
+        if trimmed == self.Text:
+            return self
+        return self.Replace(self.Text, trimmed)
+
+    def TrimEnd(self) -> RichText:  # noqa: N802
+        trimmed = self.Text.rstrip()
+        if trimmed == self.Text:
+            return self
+        return self.Replace(self.Text, trimmed)
 
     def _accept(self, visitor: DocumentVisitor) -> None:
         visitor.VisitRichTextStart(self)
@@ -267,21 +452,45 @@ class Outline(CompositeNode):
 @dataclass(slots=True)
 class Image(CompositeNode):
     FileName: str | None = None
+    FilePath: str | None = None
+    Format: str | None = None
     Bytes: bytes = b""
     Width: float | None = None
     Height: float | None = None
+    OriginalWidth: float | None = None
+    OriginalHeight: float | None = None
+    HorizontalOffset: float | None = None
+    VerticalOffset: float | None = None
     HorizontalAlignment: HorizontalAlignment | None = None
+    IsBackground: bool = False
+    LastModifiedTime: datetime | None = None
     AlternativeTextTitle: str | None = None
     AlternativeTextDescription: str | None = None
     HyperlinkUrl: str | None = None
     Tags: list[NoteTag] = field(default_factory=list)
 
+    @property
+    def Alignment(self) -> HorizontalAlignment | None:  # noqa: N802
+        return self.HorizontalAlignment
+
+    @Alignment.setter
+    def Alignment(self, value: HorizontalAlignment | None) -> None:  # noqa: N802
+        self.HorizontalAlignment = value
+
     def Replace(self, image: Image) -> None:  # noqa: N802
         self.FileName = image.FileName
+        self.FilePath = image.FilePath
+        self.Format = image.Format
         self.Bytes = image.Bytes
         self.Width = image.Width
         self.Height = image.Height
+        self.OriginalWidth = image.OriginalWidth
+        self.OriginalHeight = image.OriginalHeight
+        self.HorizontalOffset = image.HorizontalOffset
+        self.VerticalOffset = image.VerticalOffset
         self.HorizontalAlignment = image.HorizontalAlignment
+        self.IsBackground = image.IsBackground
+        self.LastModifiedTime = image.LastModifiedTime
         self.AlternativeTextTitle = image.AlternativeTextTitle
         self.AlternativeTextDescription = image.AlternativeTextDescription
         self.HyperlinkUrl = image.HyperlinkUrl
@@ -325,15 +534,22 @@ class Page(CompositeNode):
     CreationTime: datetime | None = None
     LastModifiedTime: datetime | None = None
     Level: int | None = None
+    BackgroundColor: int | None = None
+    Margin: Any | None = None
+    SizeType: Any | None = None
+    PageLayoutSize: Any | None = None
+    IsConflictPage: bool = False
+    PageContentRevisionSummary: Any | None = None
 
-    def Clone(self, deep: bool = False) -> Page:  # noqa: N802
-        return deepcopy(self) if deep else Page(
-            Title=self.Title,
-            Author=self.Author,
-            CreationTime=self.CreationTime,
-            LastModifiedTime=self.LastModifiedTime,
-            Level=self.Level,
-        )
+    def Clone(self, cloneHistory: bool = False, **kwargs: Any) -> Page:  # noqa: N802
+        if "deep" in kwargs:
+            cloneHistory = bool(kwargs.pop("deep"))
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {', '.join(sorted(kwargs))}")
+
+        cloned = deepcopy(self)
+        _rebind_tree_parents(cloned, None)
+        return cloned
 
     def _accept(self, visitor: DocumentVisitor) -> None:
         visitor.VisitPageStart(self)
@@ -379,21 +595,23 @@ class Document(CompositeNode):
 
     def Save(self, target: str | Path | BinaryIO, format_or_options: SaveFormat | SaveOptions | None = None) -> None:  # noqa: N802
         if format_or_options is None:
-            save_format = SaveFormat.One
-            options: SaveOptions | None = None
+            save_format = _infer_save_format(target)
+            options: SaveOptions | None = PdfSaveOptions()
         elif isinstance(format_or_options, SaveFormat):
             save_format = format_or_options
-            options = PdfSaveOptions(SaveFormat.Pdf) if save_format is SaveFormat.Pdf else None
-        else:
+            options = PdfSaveOptions()
+        elif isinstance(format_or_options, SaveOptions):
             save_format = format_or_options.SaveFormat
             options = format_or_options
+        else:
+            raise UnsupportedSaveFormatException("Unsupported format/options argument")
 
         if save_format is not SaveFormat.Pdf:
-            raise UnsupportedSaveFormatException(f"Save format {save_format.value!r} is not supported")
+            raise UnsupportedSaveFormatException("Only PDF save is supported")
 
         from .saving.pdf_writer import write_pdf
 
-        data = write_pdf(self, options if isinstance(options, PdfSaveOptions) else PdfSaveOptions(SaveFormat.Pdf))
+        data = write_pdf(self, options if isinstance(options, PdfSaveOptions) else PdfSaveOptions())
         if isinstance(target, (str, Path)):
             Path(target).write_bytes(data)
             return
@@ -433,9 +651,22 @@ __all__ = [
     "Document",
     "SaveOptions",
     "PdfSaveOptions",
-    "OneSaveOptions",
-    "HtmlSaveOptions",
-    "ImageSaveOptions",
     "_time32_to_datetime",
     "_filetime_to_datetime",
 ]
+
+
+def _rebind_tree_parents(node: Node, parent: Node | None) -> None:
+    node.ParentNode = parent
+    if isinstance(node, CompositeNode):
+        for child in node:
+            _rebind_tree_parents(child, node)
+
+
+def _infer_save_format(target: str | Path | BinaryIO) -> SaveFormat:
+    if isinstance(target, (str, Path)):
+        suffix = Path(target).suffix.lower()
+        if suffix == ".pdf":
+            return SaveFormat.Pdf
+        raise UnsupportedSaveFormatException("Only .pdf file targets are supported for save operations")
+    return SaveFormat.Pdf

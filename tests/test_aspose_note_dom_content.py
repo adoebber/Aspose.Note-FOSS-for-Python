@@ -50,13 +50,21 @@ class TestAsposeNoteImages(unittest.TestCase):
         images = doc.GetChildNodes(Image)
 
         self.assertEqual(
-            [image.HorizontalAlignment for image in images],
+            [image.Alignment for image in images],
             [
                 HorizontalAlignment.Right,
                 HorizontalAlignment.Center,
                 HorizontalAlignment.Left,
             ],
         )
+
+    def test_images_expose_dotnet_compatibility_metadata(self) -> None:
+        from aspose.note import Document, Image
+
+        image = Document(self.path).GetChildNodes(Image)[0]
+
+        self.assertEqual(image.OriginalWidth, image.Width)
+        self.assertEqual(image.OriginalHeight, image.Height)
 
 
 class TestAsposeNoteTables(unittest.TestCase):

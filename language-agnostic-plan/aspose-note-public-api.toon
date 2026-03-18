@@ -1,28 +1,21 @@
-; Aspose.Note for Python - public API logic specification
-; Source of truth: src/aspose/note/model.py, src/aspose/note/enums.py, src/aspose/note/exceptions.py
+; Aspose.Note - public API logic specification
+; Source of truth: src/aspose/note/model.py, src/aspose/note/enums.py, src/aspose/note/exceptions.py, src/aspose/note/saving/options.py
 ; Scope: public members defined in these files only
 
 api:
   package: aspose.note
-  language: python
-  source_files[3]: src/aspose/note/model.py,src/aspose/note/enums.py,src/aspose/note/exceptions.py
-  generated_from_date: 2026-03-04
+  source_files[4]: src/aspose/note/model.py,src/aspose/note/enums.py,src/aspose/note/exceptions.py,src/aspose/note/saving/options.py
+  generated_from_date: 2026-03-18
   guarantees:
-    compatibility_goal: mirrors Aspose.Note .NET public shape where practical
+    compatibility_goal: mirrors the official Aspose.Note public API shape where practical
     implementation_state: partial compatibility layer over internal OneNote parser/exporter
+    contract_style: public contract is described in language-agnostic terms; implementation-only notes are kept explicitly marked
 
 enums:
   SaveFormat:
     type: enum.Enum
-    members[8]{name,value,logic}:
-      One,one,default when save format/options not passed to Document.Save
-      Pdf,pdf,only format implemented in Document.Save
-      Html,html,declared for compatibility but not implemented by Document.Save
-      Jpeg,jpeg,declared for compatibility but not implemented by Document.Save
-      Png,png,declared for compatibility but not implemented by Document.Save
-      Gif,gif,declared for compatibility but not implemented by Document.Save
-      Bmp,bmp,declared for compatibility but not implemented by Document.Save
-      Tiff,tiff,declared for compatibility but not implemented by Document.Save
+    members[1]{name,value,logic}:
+      Pdf,pdf,only supported save format in the current public implementation
 
   FileFormat:
     type: enum.Enum
@@ -65,28 +58,28 @@ exceptions:
 
   IncorrectPasswordException:
     base: AsposeNoteError
-    logic: raised by Document.__init__ when LoadOptions.DocumentPassword is provided
+    logic: raised by the Document constructor when LoadOptions.DocumentPassword is provided
 
   UnsupportedFileFormatException:
     base: AsposeNoteError
     constructor:
-      signature: __init__(message:str='Unsupported file format', file_format:str|None=None)
+      signature: (message:string='Unsupported file format', file_format:string|null=null)
       logic[2]:
         passes message to base Exception
         stores provided file_format into attribute FileFormat
     members:
       FileFormat:
-        type: str|None
+        type: string|null
         logic: optional format identifier associated with the failure
 
   UnsupportedSaveFormatException:
     base: AsposeNoteError
-    logic: raised by Document.Save for unsupported format/options combinations
+    logic: raised by Document.Save when save arguments do not resolve to PDF output
 
 model:
   type_aliases:
     TNode:
-      value: TypeVar('TNode', bound='Node')
+      value: generic node type parameter constrained to Node
       logic: preserves concrete child type in composite insertion APIs
 
   classes:
@@ -114,7 +107,7 @@ model:
       purpose: compatibility stub
       methods:
         SetLicense:
-          signature: (license_path_or_stream:Any) -> None
+          signature: (license_source:object) -> void
           logic: accepts argument but performs no operation
 
     Metered:
@@ -122,19 +115,41 @@ model:
       purpose: compatibility stub
       methods:
         SetMeteredKey:
-          signature: (public_key:str, private_key:str) -> None
+          signature: (public_key:string, private_key:string) -> void
           logic: accepts keys but performs no operation
+
+    SaveOptions:
+      base: object
+      purpose: public base class for save options
+      members:
+        SaveFormat: {type:SaveFormat,logic:target output format associated with the concrete options instance; current public implementation uses SaveFormat.Pdf}
+        PageIndex: {type:integer,default:0,logic:index of the first page to render when the format supports page ranges}
+        PageCount: {type:integer|null,default:null,logic:number of pages to render; null means all pages in the current implementation}
+        FontsSubsystem: {type:object|null,default:null,logic:reserved compatibility slot for font-resolution settings}
+
+    PdfSaveOptions:
+      base: SaveOptions
+      constructor:
+        signature: (save_format:SaveFormat=SaveFormat.Pdf, PageIndex:integer=0, PageCount:integer|null=null, FontsSubsystem:object|null=null, TagIconDir:string|null=null, TagIconSize:number|null=null, TagIconGap:number|null=null, ImageCompression:object|null=null, JpegQuality:integer|null=null, PageSettings:object|null=null, PageSplittingAlgorithm:object|null=null)
+      members:
+        TagIconDir: {type:string|null,default:null,logic:optional directory used to resolve external tag icons during PDF rendering}
+        TagIconSize: {type:number|null,default:null,logic:optional rendered tag icon size in points}
+        TagIconGap: {type:number|null,default:null,logic:optional horizontal gap between tag icon and text}
+        ImageCompression: {type:object|null,default:null,logic:reserved compatibility member; current renderer does not use this value}
+        JpegQuality: {type:integer|null,default:null,logic:reserved compatibility member; current renderer does not use this value}
+        PageSettings: {type:object|null,default:null,logic:reserved compatibility member; current renderer does not use this value}
+        PageSplittingAlgorithm: {type:object|null,default:null,logic:reserved compatibility member; current renderer does not use this value}
 
     LoadOptions:
       kind: dataclass
       base: object
       members:
         DocumentPassword:
-          type: str|None
+          type: string|null
           default: null
-          logic: if non-empty, Document.__init__ raises IncorrectPasswordException
+          logic: if non-empty, the Document constructor raises IncorrectPasswordException
         LoadHistory:
-          type: bool
+          type: boolean
           default: false
           logic: stored only; current Document loader does not use this flag
 
@@ -189,22 +204,23 @@ model:
             sets node.ParentNode to self
             inserts at requested index using list semantics and returns node
         RemoveChild:
-          signature: (node:Node) -> None
+          signature: (node:Node) -> void
           logic[2]:
-            removes node from _children using list.remove (raises ValueError if absent)
+            removes node from _children
+            signals an argument-related error if node is not present
             sets removed node.ParentNode to null
         GetEnumerator:
-          signature: () -> Iterator[Node]
+          signature: () -> iterator<Node>
           logic: returns iterator over _children
-        __iter__:
-          signature: () -> Iterator[Node]
-          logic: returns iterator over _children to support for-in iteration
+        Iterate:
+          signature: () -> iterator<Node>
+          logic: returns iterator over _children
         GetChildNodes:
-          signature: (node_type:type[TNode]) -> list[TNode]
+          signature: (node_type:node-kind<TNode>) -> sequence<TNode>
           logic[3]:
-            performs depth-first recursive walk starting from self
+            performs depth-first recursive walk starting from direct children of self
             collects nodes that satisfy isinstance(node, node_type)
-            includes self in results when self matches requested type
+            does not include self in results
 
     NoteTag:
       kind: dataclass
@@ -225,9 +241,10 @@ model:
     TextStyle:
       kind: dataclass
       base: Node
-      members[13]{name,type,default,logic}:
+      members[14]{name,type,default,logic}:
         IsHyperlink,bool,false,boolean shortcut for hyperlink presence
         HyperlinkAddress,str|None,null,hyperlink URL
+        HorizontalAlignment,HorizontalAlignment|None,null,paragraph-alignment compatibility value used by current renderer
         FontName,str|None,null,font family name
         FontSize,float|None,null,font size in points
         FontColor,int|None,null,raw color value
@@ -239,6 +256,20 @@ model:
         Strikethrough,bool,false,style flag
         Superscript,bool,false,style flag
         Subscript,bool,false,style flag
+      compatibility_properties:
+        IsBold: {type:bool,logic:alias to Bold}
+        IsItalic: {type:bool,logic:alias to Italic}
+        IsUnderline: {type:bool,logic:alias to Underline}
+        IsStrikethrough: {type:bool,logic:alias to Strikethrough}
+        IsSuperscript: {type:bool,logic:alias to Superscript}
+        IsSubscript: {type:bool,logic:alias to Subscript}
+        Highlight: {type:int|None,logic:alias to HighlightColor}
+        Language: {type:integer|null,logic:alias to LanguageId in the current implementation}
+      static_properties:
+        Default: {type:TextStyle,logic:returns a new default style instance with en-US language id compatibility value}
+        DefaultMsOneNoteTitleTextStyle: {type:TextStyle,logic:returns a new title-text style instance}
+        DefaultMsOneNoteTitleDateStyle: {type:TextStyle,logic:returns a new title-date style instance}
+        DefaultMsOneNoteTitleTimeStyle: {type:TextStyle,logic:returns a new title-time style instance}
 
     TextRun:
       kind: dataclass
@@ -255,8 +286,20 @@ model:
       members:
         Text: {type:str,default:'',logic:plain text content}
         Runs: {type:list[TextRun],default:[],logic:optional style segmentation metadata}
+        ParagraphStyle: {type:TextStyle,default:TextStyle(),logic:paragraph-level fallback style used when run style does not supply a setting}
         FontSize: {type:float|None,default:null,logic:fallback font size}
+        LastModifiedTime: {type:datetime|None,default:null,logic:reserved compatibility member; current loader does not populate it}
+        SpaceBefore: {type:float|None,default:null,logic:reserved compatibility member for paragraph spacing before text}
+        SpaceAfter: {type:float|None,default:null,logic:reserved compatibility member for paragraph spacing after text}
+        LineSpacing: {type:float|None,default:null,logic:reserved compatibility member for line spacing}
         Tags: {type:list[NoteTag],default:[],logic:tag metadata associated with text}
+      properties:
+        TextRuns: {type:sequence<TextRun>,logic:alias to Runs using the canonical public member name}
+        Length: {type:int,logic:returns len(Text)}
+        Alignment: {type:HorizontalAlignment|None,logic:reads paragraph alignment from ParagraphStyle first and then from run styles; setting it updates ParagraphStyle and fills missing run alignments}
+        IsTitleText: {type:bool,logic:true when this node is the Title.TitleText child of its parent Title}
+        IsTitleDate: {type:bool,logic:true when this node is the Title.TitleDate child of its parent Title}
+        IsTitleTime: {type:bool,logic:true when this node is the Title.TitleTime child of its parent Title}
       methods:
         Append:
           signature: (text:str, style:TextStyle|None=None) -> RichText
@@ -264,9 +307,37 @@ model:
             appends text argument to Text string
             if style is provided then appends TextRun(Text=text,Style=style) to Runs
             returns self for fluent chaining
+        AppendFront:
+          signature: (text:str, style:TextStyle|None=None) -> RichText
+          logic: inserts text at the beginning and returns self
+        Clear:
+          signature: () -> RichText
+          logic: clears Text and Runs and returns self
+        GetEnumerator:
+          signature: () -> Iterator[str]
+          logic: returns iterator over characters of Text
+        Insert:
+          signature: (index:int, text:str, style:TextStyle|None=None) -> RichText
+          logic: inserts text at bounded index, normalizes current run model to a single run, and returns self
+        Remove:
+          signature: (start:int, count:int|None=None) -> RichText
+          logic: removes text from bounded range, normalizes current run model to a single run when needed, and returns self
         Replace:
-          signature: (old_value:str, new_value:str) -> None
-          logic: applies Python str.replace to Text (global replacement)
+          signature: (old_value:str, new_value:str, style:TextStyle|None=None) -> RichText
+          logic[4]:
+            rejects invalid arguments when old_value is empty or when a required string argument is null, using the target language's standard argument-validation exception model
+            replaces all occurrences of old_value in Text with new_value
+            when style is provided replacement result is represented by a single TextRun using that style
+            returns self for fluent chaining
+        Trim:
+          signature: () -> RichText
+          logic: trims leading and trailing whitespace from Text and returns self
+        TrimStart:
+          signature: () -> RichText
+          logic: trims leading whitespace from Text and returns self
+        TrimEnd:
+          signature: () -> RichText
+          logic: trims trailing whitespace from Text and returns self
 
     Title:
       kind: dataclass
@@ -297,19 +368,28 @@ model:
       base: CompositeNode
       members:
         FileName: {type:str|None,default:null,logic:original file name when available}
+        FilePath: {type:str|None,default:null,logic:reserved compatibility member; current loader usually does not populate it}
+        Format: {type:str|None,default:null,logic:reserved compatibility member for image format description}
         Bytes: {type:bytes,default:b'',logic:binary image payload}
         Width: {type:float|None,default:null,logic:image width}
         Height: {type:float|None,default:null,logic:image height}
+        OriginalWidth: {type:float|None,default:null,logic:original width before resizing; current loader mirrors Width when original size is unknown}
+        OriginalHeight: {type:float|None,default:null,logic:original height before resizing; current loader mirrors Height when original size is unknown}
+        HorizontalOffset: {type:float|None,default:null,logic:reserved compatibility member for horizontal offset}
+        VerticalOffset: {type:float|None,default:null,logic:reserved compatibility member for vertical offset}
+        HorizontalAlignment: {type:HorizontalAlignment|null,default:null,logic:current implementation field for alignment}
+        IsBackground: {type:bool,default:false,logic:reserved compatibility member}
+        LastModifiedTime: {type:datetime|None,default:null,logic:reserved compatibility member; current loader does not populate it}
         AlternativeTextTitle: {type:str|None,default:null,logic:alternate title text}
         AlternativeTextDescription: {type:str|None,default:null,logic:alternate description text}
         HyperlinkUrl: {type:str|None,default:null,logic:associated hyperlink}
         Tags: {type:list[NoteTag],default:[],logic:tags attached to image}
+      properties:
+        Alignment: {type:HorizontalAlignment|null,logic:public alias to HorizontalAlignment}
       methods:
         Replace:
           signature: (image:Image) -> None
-          logic[2]:
-            copies Bytes from source image
-            copies FileName from source image
+          logic: copies current public image metadata and payload fields from source image
 
     AttachedFile:
       kind: dataclass
@@ -355,28 +435,33 @@ model:
         CreationTime: {type:datetime|None,default:null,logic:page creation timestamp}
         LastModifiedTime: {type:datetime|None,default:null,logic:page modification timestamp}
         Level: {type:int|None,default:null,logic:page hierarchy level}
+        BackgroundColor: {type:int|None,default:null,logic:reserved compatibility member}
+        Margin: {type:Any|None,default:null,logic:reserved compatibility member}
+        SizeType: {type:Any|None,default:null,logic:reserved compatibility member}
+        PageLayoutSize: {type:Any|None,default:null,logic:reserved compatibility member}
+        IsConflictPage: {type:bool,default:false,logic:reserved compatibility member}
+        PageContentRevisionSummary: {type:Any|None,default:null,logic:reserved compatibility member}
       methods:
         Clone:
-          signature: (deep:bool=False) -> Page
-          logic[4]:
-            creates new Page with same scalar metadata and same Title reference
-            when deep is false children are not copied
-            when deep is true existing child object references are appended to clone
-            deep clone is shallow by object identity (children are not duplicated)
+          signature: (cloneHistory:boolean=false, compatibility_options:object|null=null) -> Page
+          logic[3]:
+            performs a deep structural clone of the page subtree and resets ParentNode of the clone root to null
+            cloneHistory parameter is accepted for compatibility with the canonical public contract, but page-history objects are not modeled separately in the current implementation
+            compatibility-only options may be accepted and mapped onto the cloneHistory behavior by a concrete runtime
 
     Document:
       kind: dataclass_like
       base: CompositeNode
       constructor:
-        signature: __init__(source:str|Path|BinaryIO|None=None, load_options:LoadOptions|None=None)
+        signature: (source:string|path|stream|null=null, load_options:LoadOptions|null=null)
         logic[8]:
-          initializes DisplayName and CreationTime to null, _onenote_doc to null
+          initializes DisplayName and CreationTime to null
           if source is null returns empty Document
           if load_options.DocumentPassword is provided raises IncorrectPasswordException
           imports internal onenote parser lazily
           loads parser document by path (onenote.Document.open) for str/Path source
           loads parser document by stream (onenote.Document.from_stream) otherwise
-          stores parser document in _onenote_doc and display_name in DisplayName
+          stores loaded document display name in DisplayName
           converts each parsed page and appends to children
       members:
         DisplayName:
@@ -387,10 +472,6 @@ model:
           type: datetime|None
           default: null
           logic: currently not assigned in constructor
-      internal_members:
-        _onenote_doc:
-          type: Any|None
-          logic: backing internal document used for export operations
       properties:
         FileFormat:
           type: FileFormat
@@ -407,19 +488,15 @@ model:
           logic: returns single-item list containing provided page
         Save:
           signature: (target:str|Path|BinaryIO, format_or_options:Any=None) -> None
-          format_resolution_logic[4]:
-            if format_or_options is SaveFormat then use it directly
-            if format_or_options is null then use SaveFormat.One
-            if format_or_options is SaveOptions then derive format from opts.SaveFormat
-            otherwise raise UnsupportedSaveFormatException('Unsupported format/options argument')
+          format_resolution_logic[5]:
+            if format_or_options is null and target is a file path with .pdf extension then use SaveFormat.Pdf
+            if format_or_options is null and target is stream-like then use SaveFormat.Pdf
+            if format_or_options equals SaveFormat.Pdf then use SaveFormat.Pdf
+            if format_or_options is PdfSaveOptions then use SaveFormat.Pdf with those options
+            if format_or_options is SaveOptions and opts.SaveFormat equals SaveFormat.Pdf then use SaveFormat.Pdf
+            otherwise raise UnsupportedSaveFormatException('Only PDF save is supported')
           execution_logic:
-            pdf_branch:
-              condition: resolved format equals SaveFormat.Pdf
-              steps[4]:
-                if _onenote_doc is null raise UnsupportedSaveFormatException('Cannot export empty Document to PDF')
-                if options is PdfSaveOptions map TagIconDir/TagIconSize/TagIconGap to internal PdfExportOptions
-                call _onenote_doc.export_pdf(target, options=pdf_opts) when PdfSaveOptions provided
-                call _onenote_doc.export_pdf(target) otherwise
-            non_pdf_branch:
-              condition: resolved format is not SaveFormat.Pdf
-              behavior: raise UnsupportedSaveFormatException("SaveFormat '{fmt.name}' is not supported in this Python implementation")
+            steps[3]:
+              render current public DOM to PDF bytes using the current renderer
+              if options is PdfSaveOptions honor the currently supported subset (PageIndex, PageCount, TagIconDir, TagIconSize, TagIconGap)
+              write produced bytes to file path or stream target

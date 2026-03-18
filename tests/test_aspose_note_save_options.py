@@ -29,8 +29,24 @@ class TestAsposeNoteSaveOptions(unittest.TestCase):
     def test_pdf_save_options_roundtrip(self) -> None:
         from aspose.note import PdfSaveOptions, SaveFormat
 
-        opts = PdfSaveOptions(SaveFormat.Pdf)
+        opts = PdfSaveOptions()
         self.assertEqual(opts.SaveFormat, SaveFormat.Pdf)
+        self.assertEqual(opts.PageIndex, 0)
+        self.assertIsNone(opts.PageCount)
+
+    def test_save_format_exports_only_pdf(self) -> None:
+        from aspose.note import SaveFormat
+
+        self.assertEqual(list(SaveFormat), [SaveFormat.Pdf])
+
+    def test_save_options_expose_common_base_properties(self) -> None:
+        from aspose.note import PdfSaveOptions, SaveFormat
+
+        opts = PdfSaveOptions(PageIndex=2, PageCount=3, FontsSubsystem="fonts-subsystem")
+        self.assertEqual(opts.SaveFormat, SaveFormat.Pdf)
+        self.assertEqual(opts.PageIndex, 2)
+        self.assertEqual(opts.PageCount, 3)
+        self.assertEqual(opts.FontsSubsystem, "fonts-subsystem")
 
 
 @unittest.skipUnless(HAS_REPORTLAB, "reportlab not installed")
@@ -43,12 +59,24 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         cls.path = p
 
     def test_save_pdf_with_pdfsaveoptions(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document, PdfSaveOptions
 
         doc = Document(self.path)
         buf = io.BytesIO()
-        doc.Save(buf, PdfSaveOptions(SaveFormat.Pdf))
+        doc.Save(buf, PdfSaveOptions())
         self.assertTrue(buf.getvalue().startswith(b"%PDF"))
+
+    def test_save_pdf_infers_format_from_path_extension(self) -> None:
+        from aspose.note import Document
+
+        doc = Document(self.path)
+        output = Path("tests/out/pdf_export/inferred_extension_save.pdf")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(output.unlink, missing_ok=True)
+
+        doc.Save(output)
+
+        self.assertTrue(output.read_bytes().startswith(b"%PDF"))
 
     def test_pdf_writer_renders_note_tags(self) -> None:
         from aspose.note import Document, NoteTag, Page, PdfSaveOptions, RichText, SaveFormat
@@ -685,9 +713,9 @@ class TestAsposeNoteSaveUnsupportedFormats(unittest.TestCase):
             raise unittest.SkipTest("FormattedRichText.one not found")
         cls.path = p
 
-    def test_save_one_raises(self) -> None:
-        from aspose.note import Document, SaveFormat, UnsupportedSaveFormatException
+    def test_save_non_pdf_path_raises(self) -> None:
+        from aspose.note import Document, UnsupportedSaveFormatException
 
         doc = Document(self.path)
         with self.assertRaises(UnsupportedSaveFormatException):
-            doc.Save(io.BytesIO(), SaveFormat.One)
+            doc.Save("unsupported-output.one")

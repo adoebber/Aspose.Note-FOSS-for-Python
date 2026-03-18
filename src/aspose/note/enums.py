@@ -4,14 +4,7 @@ from enum import Enum
 
 
 class SaveFormat(Enum):
-    One = "one"
     Pdf = "pdf"
-    Html = "html"
-    Jpeg = "jpeg"
-    Png = "png"
-    Gif = "gif"
-    Bmp = "bmp"
-    Tiff = "tiff"
 
 
 class FileFormat(Enum):

@@ -89,10 +89,48 @@ class TestAsposeNoteRichTextOperations(unittest.TestCase):
             raise unittest.SkipTest("No RichText nodes with replaceable content found")
 
         before = target.Text
-        target.Replace(" ", "  ")
+        returned = target.Replace(" ", "  ")
         after = target.Text
+        self.assertIs(returned, target)
         self.assertNotEqual(before, after)
         doc.Save("FormattedRichText.pdf", SaveFormat.Pdf)
+
+    def test_richtext_supports_dotnet_text_runs_alias(self) -> None:
+        from aspose.note import Document, RichText
+
+        doc = Document(self.path)
+        rich_text = next(rt for rt in doc.GetChildNodes(RichText) if rt.Runs)
+
+        self.assertIs(rich_text.TextRuns, rich_text.Runs)
+        self.assertEqual(rich_text.Length, len(rich_text.Text))
+
+
+class TestAsposeNotePageClone(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        p = _fixture_path("FormattedRichText.one")
+        if p is None:
+            raise unittest.SkipTest("FormattedRichText.one not found")
+        cls.path = p
+
+    def test_page_clone_duplicates_content_tree(self) -> None:
+        from aspose.note import Document, Page, RichText
+
+        page = Document(self.path).GetChildNodes(Page)[0]
+        cloned = page.Clone()
+
+        self.assertIsNot(cloned, page)
+        self.assertEqual(len(list(cloned)), len(list(page)))
+        self.assertEqual(len(cloned.GetChildNodes(RichText)), len(page.GetChildNodes(RichText)))
+        self.assertIsNone(cloned.ParentNode)
+
+    def test_page_clone_accepts_clone_history_keyword(self) -> None:
+        from aspose.note import Document, Page
+
+        page = Document(self.path).GetChildNodes(Page)[0]
+        cloned = page.Clone(cloneHistory=True)
+
+        self.assertIsNot(cloned, page)
 
 
 class TestAsposeNoteVisitor(unittest.TestCase):

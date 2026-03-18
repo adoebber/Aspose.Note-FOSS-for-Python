@@ -32,7 +32,7 @@ from .model import (
     TextStyle,
     Title,
 )
-from .saving.options import HtmlSaveOptions, ImageSaveOptions, OneSaveOptions, PdfSaveOptions, SaveOptions
+from .saving.options import PdfSaveOptions, SaveOptions
 
 __all__ = [
     "AsposeNoteError",
@@ -68,7 +68,4 @@ __all__ = [
     "Document",
     "SaveOptions",
     "PdfSaveOptions",
-    "OneSaveOptions",
-    "HtmlSaveOptions",
-    "ImageSaveOptions",
 ]

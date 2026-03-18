@@ -64,6 +64,28 @@ class TestAsposeNoteRichTextFormatting(unittest.TestCase):
 
         self.assertTrue(any(is_styled(rt) for rt in rts))
 
+    def test_textstyle_dotnet_property_aliases(self) -> None:
+        from aspose.note import TextStyle
+
+        style = TextStyle.Default
+        style.IsBold = True
+        style.IsItalic = True
+        style.IsUnderline = True
+        style.IsStrikethrough = True
+        style.IsSuperscript = True
+        style.IsSubscript = True
+        style.Highlight = 123
+        style.Language = 1031
+
+        self.assertTrue(style.Bold)
+        self.assertTrue(style.Italic)
+        self.assertTrue(style.Underline)
+        self.assertTrue(style.Strikethrough)
+        self.assertTrue(style.Superscript)
+        self.assertTrue(style.Subscript)
+        self.assertEqual(style.HighlightColor, 123)
+        self.assertEqual(style.LanguageId, 1031)
+
     def test_formatted_richtext_run_boundaries_align_with_visible_text(self) -> None:
         from aspose.note import Document, RichText
 

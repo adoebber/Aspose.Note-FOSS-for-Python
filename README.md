@@ -129,8 +129,7 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
   - `GetPageHistory(page) -> list[Page]` (currently returns `[page]`)
   - `DetectLayoutChanges()` (compatibility stub)
   - `Save(target, format_or_options=None)`
-    - supported: `SaveFormat.Pdf`
-    - other `SaveFormat` values currently raise `UnsupportedSaveFormatException`
+    - supported: `SaveFormat.Pdf` only
 
 - `DocumentVisitor` — base visitor for traversal:
   - `VisitDocumentStart/End`, `VisitPageStart/End`, `VisitTitleStart/End`, `VisitOutlineStart/End`,
@@ -230,11 +229,9 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
   - `PageIndex: int`, `PageCount: int | None`
   - `TagIconDir: str | None`, `TagIconSize: float | None`, `TagIconGap: float | None`
 
-- `OneSaveOptions`, `HtmlSaveOptions`, `ImageSaveOptions` — declared for API compatibility but not implemented.
-
 ### 🔢 Enums
 
-- `SaveFormat`: `One`, `Pdf`, `Html`, plus raster formats (`Jpeg`, `Png`, `Gif`, `Bmp`, `Tiff`)
+- `SaveFormat`: `Pdf`
 - `FileFormat`: `OneNote2010`, `OneNoteOnline`, `OneNote2007`
 - `HorizontalAlignment`: `Left`, `Center`, `Right`
 - `NodeType`: `Document`, `Page`, `Outline`, `OutlineElement`, `RichText`, `Image`, `Table`, `AttachedFile`
