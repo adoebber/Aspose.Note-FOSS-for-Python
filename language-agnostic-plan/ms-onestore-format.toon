@@ -6,11 +6,11 @@
 
 format:
   name: OneNote Revision Store
-  extensions: .one, .onetoc2
+  extensions: .one
   spec_version: MS-ONESTORE v20250520
   semantic_layer: MS-ONE v20221115
   byte_order: little-endian
-  description: Binary file format for OneNote revision-based storage of sections and notebooks
+  description: Binary file format subset currently supported by the library for OneNote section files
 
 ; =============================================================================
 ; 1. MAGIC CONSTANTS & GUIDs
@@ -24,9 +24,8 @@ magic_constants:
   encryption_header: 0xFB6BA385DAD1A067
   encryption_footer: 0x2649294F8E198B3C
 
-file_type_guids[2]{guid,ffv,description}:
+file_type_guids[1]{guid,ffv,description}:
   {7B5C52E4-D88C-4DA7-AEB1-5378D02996D3}, 0x2A, OneNote section (.one)
-  {43FF2FA1-EFD9-4C76-9EE2-10EA5722765F}, 0x1B, Table of contents (.onetoc2)
 
 ; =============================================================================
 ; 2. COMMON TYPES (section 2.2)
@@ -101,7 +100,7 @@ FileNodeChunkReference:
 Header:
   description: File header at offset 0; size 1024 bytes
   fields[20]{name,offset,size,type,description}:
-    guidFileType, 0, 16, GUID, identifies .one or .onetoc2 per file_type_guids
+    guidFileType, 0, 16, GUID, identifies supported .one section files per file_type_guids
     guidFile, 16, 16, GUID, unique file identity
     guidLegacyFileVersion, 32, 16, GUID, MUST be {00000000-0000-0000-0000-000000000000}
     guidFileFormat, 48, 16, GUID, MUST be {109ADD3F-911B-49F5-A5D0-1791EDC8AED8}
@@ -228,23 +227,23 @@ FileNodeID_Table[31]{id_hex,name,BaseType,formats,section}:
   0x008, ObjectSpaceManifestListReferenceFND, 2, .one, 2.5.2
   0x00C, ObjectSpaceManifestListStartFND, 0, .one, 2.5.3
   0x010, RevisionManifestListReferenceFND, 2, .one, 2.5.4
-  0x014, RevisionManifestListStartFND, 0, .one/.onetoc2, 2.5.5
+  0x014, RevisionManifestListStartFND, 0, .one, 2.5.5
   0x01B, RevisionManifestStart4FND, 0, .one, 2.5.6
-  0x01C, RevisionManifestEndFND, 0, .one/.onetoc2, —
-  0x01E, RevisionManifestStart6FND, 0, .one/.onetoc2, 2.5.7
+  0x01C, RevisionManifestEndFND, 0, .one, —
+  0x01E, RevisionManifestStart6FND, 0, .one, 2.5.7
   0x01F, RevisionManifestStart7FND, 0, .one, 2.5.8
-  0x021, GlobalIdTableStartFNDX, 0, .one/.onetoc2, 2.5.9
-  0x022, GlobalIdTableEndFNDX, 0, .one/.onetoc2, —
-  0x024, GlobalIdTableEntryFNDX, 0, .one/.onetoc2, 2.5.10
-  0x025, GlobalIdTableEntry2FNDX, 0, .one/.onetoc2, 2.5.11
-  0x026, GlobalIdTableEntry3FNDX, 0, .one/.onetoc2, 2.5.12
-  0x02D, ObjectDeclarationWithRefCountFNDX, 1, .one/.onetoc2, 2.5.23
-  0x02E, ObjectDeclarationWithRefCount2FNDX, 1, .one/.onetoc2, 2.5.24
-  0x041, ObjectRevisionWithRefCountFNDX, 1, .one/.onetoc2, 2.5.13
-  0x042, ObjectRevisionWithRefCount2FNDX, 1, .one/.onetoc2, 2.5.14
-  0x059, RootObjectReference2FNDX, 0, .one/.onetoc2, 2.5.15
+  0x021, GlobalIdTableStartFNDX, 0, .one, 2.5.9
+  0x022, GlobalIdTableEndFNDX, 0, .one, —
+  0x024, GlobalIdTableEntryFNDX, 0, .one, 2.5.10
+  0x025, GlobalIdTableEntry2FNDX, 0, .one, 2.5.11
+  0x026, GlobalIdTableEntry3FNDX, 0, .one, 2.5.12
+  0x02D, ObjectDeclarationWithRefCountFNDX, 1, .one, 2.5.23
+  0x02E, ObjectDeclarationWithRefCount2FNDX, 1, .one, 2.5.24
+  0x041, ObjectRevisionWithRefCountFNDX, 1, .one, 2.5.13
+  0x042, ObjectRevisionWithRefCount2FNDX, 1, .one, 2.5.14
+  0x059, RootObjectReference2FNDX, 0, .one, 2.5.15
   0x05A, RootObjectReference3FND, 0, .one, 2.5.16
-  0x05C, RevisionRoleDeclarationFND, 0, .one/.onetoc2, 2.5.17
+  0x05C, RevisionRoleDeclarationFND, 0, .one, 2.5.17
   0x05D, RevisionRoleAndContextDeclarationFND, 0, .one, 2.5.18
   0x072, ObjectDeclarationFileData3RefCountFND, 0, .one, 2.5.27
   0x073, ObjectDeclarationFileData3LargeRefCountFND, 0, .one, 2.5.28
@@ -252,15 +251,15 @@ FileNodeID_Table[31]{id_hex,name,BaseType,formats,section}:
   0x08C, DataSignatureGroupDefinitionFND, 0, .one, 2.5.33
   0x090, FileDataStoreListReferenceFND, 2, .one, 2.5.21
   0x094, FileDataStoreObjectReferenceFND, 1, .one, 2.5.22
-  0x0A4, ObjectDeclaration2RefCountFND, 1, .one/.onetoc2, 2.5.25
-  0x0A5, ObjectDeclaration2LargeRefCountFND, 1, .one/.onetoc2, 2.5.26
-  0x0B0, ObjectGroupListReferenceFND, 2, .one/.onetoc2, 2.5.31
-  0x0B4, ObjectGroupStartFND, 0, .one/.onetoc2, 2.5.32
-  0x0B8, ObjectGroupEndFND, 0, .one/.onetoc2, —
-  0x0C2, ObjectInfoDependencyOverridesFND, 1, .one/.onetoc2, 2.5.20
+  0x0A4, ObjectDeclaration2RefCountFND, 1, .one, 2.5.25
+  0x0A5, ObjectDeclaration2LargeRefCountFND, 1, .one, 2.5.26
+  0x0B0, ObjectGroupListReferenceFND, 2, .one, 2.5.31
+  0x0B4, ObjectGroupStartFND, 0, .one, 2.5.32
+  0x0B8, ObjectGroupEndFND, 0, .one, —
+  0x0C2, ObjectInfoDependencyOverridesFND, 1, .one, 2.5.20
   0x0C4, ReadOnlyObjectDeclaration2RefCountFND, 1, .one, 2.5.29
   0x0C5, ReadOnlyObjectDeclaration2LargeRefCountFND, 1, .one, 2.5.30
-  0x0FF, ChunkTerminatorFND, 0, .one/.onetoc2, —
+  0x0FF, ChunkTerminatorFND, 0, .one, —
 
 FileNodeID_InteroperabilityNotes[3]{id_hex,note}:
   0x022, In some ObjectGroup streams this node appears as an effective GlobalIdTable start delimiter
@@ -841,10 +840,8 @@ PropertyID_Table[108]{property_id_hex,name,type_info}:
 ; 13. JCID (PROPERTY SET) TYPES — MS-ONE section 2.1.13
 ; =============================================================================
 
-JCID_Table[29]{jcid_hex,name,FileNodeIDs,description}:
+JCID_Table[27]{jcid_hex,name,FileNodeIDs,description}:
   0x00120001, jcidReadOnlyPersistablePropertyContainerForAuthor, 0xA1/0xA2, read-only author data
-  0x00020001, jcidPersistablePropertyContainerForTOC, 0x2D/0x2E, TOC root (.onetoc2)
-  0x00020001, jcidPersistablePropertyContainerForTOCSection, 0x2D/0x2E, TOC section entry (.onetoc2)
   0x00060007, jcidSectionNode, 0xA1/0xA2, section content root
   0x00060008, jcidPageSeriesNode, 0xA1/0xA2, page series container
   0x0006000B, jcidPageNode, 0xA1/0xA2, page
@@ -1112,17 +1109,12 @@ Time32:
 ;       └─ jcidSectionMetaData (metadata root)
 ;   └─ jcidPageMetaData (per-page metadata root)
 
-; --- .onetoc2 file hierarchy ---
-; jcidPersistablePropertyContainerForTOC (root)
-;   └─ jcidPersistablePropertyContainerForTOCSection[]
-
 ; =============================================================================
 ; 17. FSSHTTP TRANSMISSION CONSTANTS (section 2.7)
 ; =============================================================================
 
-FSSHTTP_StorageManifest_GUIDs[2]{file_type,guid}:
+FSSHTTP_StorageManifest_GUIDs[1]{file_type,guid}:
   .one, {1F937CB4-B26F-445F-B9F8-17E20160E461}
-  .onetoc2, {E4DBFD38-E5C7-408B-A8A1-0E7B421E1F5F}
 
 FSSHTTP_CellID:
   header_root_exguid: {{1A5A319C-C26b-41AA-B9C5-9BD8C44E07D4}\, 1}
