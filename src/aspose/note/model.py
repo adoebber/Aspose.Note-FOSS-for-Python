@@ -564,6 +564,7 @@ class Document(CompositeNode):
         self.DisplayName: str | None = None
         self.CreationTime: datetime | None = None
         self._onenote_doc: Any | None = None
+        self._page_histories: dict[int, list[Page]] = {}
 
         if source is None:
             return
@@ -574,11 +575,12 @@ class Document(CompositeNode):
 
         from ._internal.ms_one.loader import load_onenote_document
 
-        loaded = load_onenote_document(source)
+        loaded = load_onenote_document(source, include_page_history=load_options.LoadHistory)
         self.DisplayName = loaded.display_name
         self._onenote_doc = loaded
-        for page in loaded.pages:
+        for page, history in zip(loaded.pages, loaded.page_histories, strict=False):
             self.AppendChildLast(page)
+            self._page_histories[id(page)] = history or [page]
 
     @property
     def FileFormat(self) -> FileFormat:  # noqa: N802
@@ -591,7 +593,7 @@ class Document(CompositeNode):
         return None
 
     def GetPageHistory(self, page: Page) -> list[Page]:  # noqa: N802
-        return [page]
+        return self._page_histories.get(id(page), [page])
 
     def Save(self, target: str | Path | BinaryIO, format_or_options: SaveFormat | SaveOptions | None = None) -> None:  # noqa: N802
         if format_or_options is None:

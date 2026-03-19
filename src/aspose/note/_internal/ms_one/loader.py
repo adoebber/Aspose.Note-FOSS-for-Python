@@ -48,6 +48,7 @@ class LoadedOneNoteDocument:
     display_name: str | None
     logical_document: LogicalDocument
     pages: list[Page]
+    page_histories: list[list[Page]]
 
 
 def _decode_utf16(value: Any) -> str | None:
@@ -151,16 +152,24 @@ def _unique_tags(tags: list[NoteTag]) -> list[NoteTag]:
 
 
 class _Builder:
-    def __init__(self, parsed: OneStoreFile) -> None:
+    def __init__(self, parsed: OneStoreFile, include_page_history: bool = False) -> None:
         self.parsed = parsed
+        self.include_page_history = include_page_history
+        self._snapshot_cache: dict[int, dict[int, dict[ExtendedGUID, OneStoreObject]]] = {}
+        self._revision_index_cache: dict[int, dict[ExtendedGUID, int]] = {}
         self.section_space = self._select_section_space(parsed)
         self.content_space = self._select_content_space(parsed)
         self.space = self.content_space or self.section_space
+        self.current_revision_index = None
         self.objects = self.space.objects if self.space is not None else {}
+        self.current_revision_index = self._select_current_revision_index(self.space)
+        self.objects = self._get_snapshot_objects(self.space, self.current_revision_index)
 
     def build(self) -> LoadedOneNoteDocument:
         logical_root = self._build_logical_root()
-        pages = self._build_pages(logical_root)
+        page_pairs = self._build_page_pairs(logical_root)
+        pages = [page for _, page in page_pairs]
+        page_histories = self._build_page_histories(page_pairs)
         display_name = None
         if self.section_space and self.section_space.section_display_name:
             display_name = self.section_space.section_display_name
@@ -170,11 +179,227 @@ class _Builder:
             display_name = self.parsed.display_name
         if display_name is None and pages:
             display_name = pages[0].Title.TitleText.Text if pages[0].Title and pages[0].Title.TitleText else None
-        return LoadedOneNoteDocument(display_name=display_name, logical_document=LogicalDocument(logical_root), pages=pages)
+        return LoadedOneNoteDocument(
+            display_name=display_name,
+            logical_document=LogicalDocument(logical_root),
+            pages=pages,
+            page_histories=page_histories,
+        )
+
+    def _select_current_revision_index(self, space):
+        if space is None or not getattr(space, "revisions", None):
+            return None
+        preferred = getattr(space, "get_latest_revision_index", lambda role: None)(ROOT_ROLE_DEFAULT_CONTENT)
+        if preferred is not None and self._is_page_revision(space, preferred):
+            return preferred
+        for revision_index in range(len(space.revisions) - 1, -1, -1):
+            if not self._is_page_revision(space, revision_index):
+                continue
+            if space.revisions[revision_index].context_id is None:
+                return revision_index
+        for revision_index in range(len(space.revisions) - 1, -1, -1):
+            if self._is_page_revision(space, revision_index):
+                return revision_index
+        return len(space.revisions) - 1
+
+    def _is_zero_extended_guid(self, value: ExtendedGUID | None) -> bool:
+        return value is None or (value.guid == "00000000-0000-0000-0000-000000000000" and value.n == 0)
+
+    def _get_revision_index_map(self, space) -> dict[ExtendedGUID, int]:
+        if space is None:
+            return {}
+        return self._revision_index_cache.setdefault(id(space), {revision.rid: index for index, revision in enumerate(space.revisions)})
+
+    def _get_parent_revision_index(self, space, revision_index: int) -> int | None:
+        if space is None or not (0 <= revision_index < len(space.revisions)):
+            return None
+        dependent_rid = space.revisions[revision_index].rid_dependent
+        if self._is_zero_extended_guid(dependent_rid):
+            return None
+        return self._get_revision_index_map(space).get(dependent_rid)
+
+    def _revision_direct_root(self, space, revision_index: int) -> ExtendedGUID | None:
+        if space is None or not (0 <= revision_index < len(space.revisions)):
+            return None
+        return space.revisions[revision_index].root_roles.get(ROOT_ROLE_DEFAULT_CONTENT)
+
+    def _revision_direct_objects(self, space, revision_index: int) -> dict[ExtendedGUID, OneStoreObject]:
+        if space is None or not (0 <= revision_index < len(space.revisions)):
+            return {}
+        return space.revisions[revision_index].objects
+
+    def _is_page_revision(self, space, revision_index: int, direct_only: bool = False) -> bool:
+        if space is None or not (0 <= revision_index < len(space.revisions)):
+            return False
+        if direct_only:
+            root = self._revision_direct_root(space, revision_index)
+            objects = self._revision_direct_objects(space, revision_index)
+        else:
+            root = self._get_snapshot_root(space, revision_index)
+            objects = self._get_snapshot_objects(space, revision_index)
+        if root is None:
+            return False
+        record = objects.get(root)
+        return bool(record and record.jcid_name in {"PageManifestNode", "PageNode"})
+
+    def _page_identity_from_objects(self, oid: ExtendedGUID, objects: dict[ExtendedGUID, OneStoreObject]) -> ExtendedGUID | bytes:
+        record = objects.get(oid)
+        if record is None:
+            return oid
+        notebook_guid = record.properties.get("NotebookManagementEntityGuid")
+        if isinstance(notebook_guid, bytes) and notebook_guid:
+            return notebook_guid
+        return oid
+
+    def _page_identity_keys_from_objects(self, oid: ExtendedGUID, objects: dict[ExtendedGUID, OneStoreObject]) -> tuple[ExtendedGUID | bytes, ...]:
+        record = objects.get(oid)
+        keys: list[ExtendedGUID | bytes] = [oid]
+        if record is not None:
+            notebook_guid = record.properties.get("NotebookManagementEntityGuid")
+            if isinstance(notebook_guid, bytes) and notebook_guid:
+                keys.append(notebook_guid)
+        return tuple(keys)
+
+    def _revision_last_modified_timestamp(self, space, revision_index: int) -> int | None:
+        if space is None or not (0 <= revision_index < len(space.revisions)):
+            return None
+        for record in space.revisions[revision_index].objects.values():
+            if record.jcid_name != "RevisionMetaData":
+                continue
+            value = record.properties.get("LastModifiedTimeStamp")
+            if isinstance(value, int):
+                return value
+        return None
+
+    def _get_snapshot_objects(self, space, revision_index: int | None) -> dict[ExtendedGUID, OneStoreObject]:
+        if space is None:
+            return {}
+        if revision_index is not None and 0 <= revision_index < len(space.revisions):
+            space_cache = self._snapshot_cache.setdefault(id(space), {})
+            cached = space_cache.get(revision_index)
+            if cached is not None:
+                return cached
+            parent_revision_index = self._get_parent_revision_index(space, revision_index)
+            if parent_revision_index is None:
+                merged = dict(space.revisions[revision_index].objects)
+            else:
+                merged = dict(self._get_snapshot_objects(space, parent_revision_index))
+                merged.update(space.revisions[revision_index].objects)
+            space_cache[revision_index] = merged
+            return merged
+        return space.objects
+
+    def _get_snapshot_root(self, space, revision_index: int | None) -> ExtendedGUID | None:
+        if space is None:
+            return None
+        if revision_index is not None and 0 <= revision_index < len(space.revisions):
+            current_index: int | None = revision_index
+            seen: set[int] = set()
+            while current_index is not None and current_index not in seen:
+                seen.add(current_index)
+                root = space.revisions[current_index].root_roles.get(ROOT_ROLE_DEFAULT_CONTENT)
+                if root is not None:
+                    return root
+                current_index = self._get_parent_revision_index(space, current_index)
+        return space.get_latest_root(ROOT_ROLE_DEFAULT_CONTENT)
+
+    def _page_text_signature(self, page: Page) -> str:
+        parts: list[str] = []
+        for rich_text in page.GetChildNodes(RichText):
+            text = rich_text.Text.strip()
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+
+    def _published_page_revision_indices(self) -> list[int]:
+        if self.space is None:
+            return []
+
+        latest_root_entries = getattr(self.space, "iter_latest_roots", lambda role: [])(ROOT_ROLE_DEFAULT_CONTENT)
+        candidates: list[tuple[int | None, int]] = []
+        seen_indices: set[int] = set()
+        for context_id, root in latest_root_entries:
+            revision_index = getattr(self.space, "get_latest_revision_index", lambda role, ctx=None: None)(
+                ROOT_ROLE_DEFAULT_CONTENT,
+                context_id,
+            )
+            if revision_index is None or revision_index in seen_indices:
+                continue
+            revision_objects = self._get_snapshot_objects(self.space, revision_index)
+            record = revision_objects.get(root)
+            if record is None or record.jcid_name not in {"PageManifestNode", "PageNode"}:
+                continue
+            seen_indices.add(revision_index)
+            timestamp = self._revision_last_modified_timestamp(self.space, revision_index)
+            candidates.append((int(timestamp) if timestamp is not None else None, revision_index))
+
+        candidates.sort(key=lambda item: (item[0] is None, item[0] if item[0] is not None else 0, item[1]))
+        return [revision_index for _, revision_index in candidates]
+
+    def _build_page_histories(self, current_page_pairs: list[tuple[ExtendedGUID, Page]]) -> list[list[Page]]:
+        if not self.include_page_history or self.space is None or not current_page_pairs:
+            return [[page] for _, page in current_page_pairs]
+
+        if not getattr(self.space, "revisions", None):
+            return [[page] for _, page in current_page_pairs]
+
+        current_revision_index = self.current_revision_index
+        if current_revision_index is None:
+            return [[page] for _, page in current_page_pairs]
+
+        histories_by_identity: dict[int, list[tuple[int | None, int, Page]]] = {id(page): [] for _, page in current_page_pairs}
+        current_pages_by_key: dict[ExtendedGUID | bytes, int] = {}
+        for oid, page in current_page_pairs:
+            for key in self._page_identity_keys_from_objects(oid, self.objects):
+                current_pages_by_key.setdefault(key, id(page))
+
+        for revision_index in self._published_page_revision_indices():
+            page_pairs = self._build_page_pairs_for_revision(self.space, revision_index)
+            timestamp = self._revision_last_modified_timestamp(self.space, revision_index)
+            revision_objects = self._get_snapshot_objects(self.space, revision_index)
+            for oid, page in page_pairs:
+                page_id = None
+                for key in self._page_identity_keys_from_objects(oid, revision_objects):
+                    page_id = current_pages_by_key.get(key)
+                    if page_id is not None:
+                        break
+                if page_id is None:
+                    continue
+                histories_by_identity[page_id].append((int(timestamp) if timestamp is not None else None, revision_index, page))
+
+        result: list[list[Page]] = []
+        for oid, current_page in current_page_pairs:
+            revisions = histories_by_identity.get(id(current_page), [])
+            if not revisions:
+                result.append([current_page])
+                continue
+
+            ordered_pages = [
+                page
+                for _, _, page in sorted(
+                    revisions,
+                    key=lambda item: (item[0] is None, item[0] if item[0] is not None else 0, item[1]),
+                )
+            ]
+            unique: list[Page] = []
+            last_signature: str | None = None
+            for page in ordered_pages:
+                signature = self._page_text_signature(page)
+                if last_signature is None or signature != last_signature:
+                    unique.append(page)
+                    last_signature = signature
+
+            if unique:
+                unique[-1] = current_page
+                result.append(unique)
+            else:
+                result.append([current_page])
+
+        return result
 
     def _select_section_space(self, parsed: OneStoreFile):
         for space in parsed.object_spaces:
-            root = space.root_roles.get(ROOT_ROLE_DEFAULT_CONTENT)
+            root = space.get_latest_root(ROOT_ROLE_DEFAULT_CONTENT)
             if root is None:
                 continue
             record = space.objects.get(root)
@@ -186,7 +411,19 @@ class _Builder:
         best_space = None
         best_score = -1
         for space in parsed.object_spaces:
-            score = sum(1 for obj in space.objects.values() if obj.jcid_name in {"PageNode", "OutlineNode", "RichTextOENode", "ImageNode", "TableNode", "EmbeddedFileNode"})
+            snapshots = [space.objects]
+            snapshots.extend(revision.objects for revision in getattr(space, "revisions", []))
+            score = max(
+                (
+                    sum(
+                        1
+                        for obj in snapshot.values()
+                        if obj.jcid_name in {"PageNode", "OutlineNode", "RichTextOENode", "ImageNode", "TableNode", "EmbeddedFileNode"}
+                    )
+                    for snapshot in snapshots
+                ),
+                default=0,
+            )
             if score > best_score:
                 best_space = space
                 best_score = score
@@ -195,7 +432,7 @@ class _Builder:
     def _build_logical_root(self) -> LogicalNode | None:
         if self.space is None:
             return None
-        root = self.space.root_roles.get(ROOT_ROLE_DEFAULT_CONTENT)
+        root = self._get_snapshot_root(self.space, self.current_revision_index)
         if root is None:
             return None
         return self._build_logical_node(root, set())
@@ -240,11 +477,11 @@ class _Builder:
             stack.extend(reversed(current.children))
         return result
 
-    def _build_pages(self, root: LogicalNode | None) -> list[Page]:
-        pages: list[Page] = []
+    def _build_page_pairs(self, root: LogicalNode | None) -> list[tuple[ExtendedGUID, Page]]:
+        pages: list[tuple[ExtendedGUID, Page]] = []
         for node in self._descendants(root):
             if node.kind == "PageNode":
-                pages.append(self._build_page(node))
+                pages.append((node.oid, self._build_page(node)))
         if pages:
             return pages
 
@@ -252,8 +489,40 @@ class _Builder:
         for oid in page_nodes:
             logical_page = self._build_logical_node(oid, set())
             if logical_page is not None:
-                pages.append(self._build_page(logical_page))
+                pages.append((oid, self._build_page(logical_page)))
         return pages
+
+    def _build_page_pairs_for_revision(self, space, revision_index: int) -> list[tuple[ExtendedGUID, Page]]:
+        saved_objects = self.objects
+        saved_space = self.space
+        saved_revision_index = self.current_revision_index
+        try:
+            self.space = space
+            self.current_revision_index = revision_index
+            self.objects = self._get_snapshot_objects(space, revision_index)
+            root = self._get_snapshot_root(space, revision_index)
+            logical_root = self._build_logical_node(root, set()) if root is not None else None
+            return self._build_page_pairs(logical_root)
+        finally:
+            self.objects = saved_objects
+            self.space = saved_space
+            self.current_revision_index = saved_revision_index
+
+    def _build_page_pairs_for_manifest_revision(self, space, revision_index: int) -> list[tuple[ExtendedGUID, Page]]:
+        saved_objects = self.objects
+        saved_space = self.space
+        saved_revision_index = self.current_revision_index
+        try:
+            self.space = space
+            self.current_revision_index = revision_index
+            self.objects = self._revision_direct_objects(space, revision_index)
+            root = self._revision_direct_root(space, revision_index)
+            logical_root = self._build_logical_node(root, set()) if root is not None else None
+            return self._build_page_pairs(logical_root)
+        finally:
+            self.objects = saved_objects
+            self.space = saved_space
+            self.current_revision_index = saved_revision_index
 
     def _build_page(self, node: LogicalNode) -> Page:
         page = Page()
@@ -571,6 +840,6 @@ class _Builder:
         return _unique_tags(tags)
 
 
-def load_onenote_document(source: str | Path | BinaryIO) -> LoadedOneNoteDocument:
+def load_onenote_document(source: str | Path | BinaryIO, include_page_history: bool = False) -> LoadedOneNoteDocument:
     parsed = parse_onestore_file(source)
-    return _Builder(parsed).build()
+    return _Builder(parsed, include_page_history=include_page_history).build()

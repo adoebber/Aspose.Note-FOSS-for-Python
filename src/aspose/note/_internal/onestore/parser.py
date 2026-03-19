@@ -171,11 +171,62 @@ class OneStoreObject:
 
 
 @dataclass(slots=True)
+class RevisionManifestRecord:
+    rid: ExtendedGUID
+    rid_dependent: ExtendedGUID | None
+    context_id: ExtendedGUID | None
+    root_roles: dict[int, ExtendedGUID] = field(default_factory=dict)
+    objects: dict[ExtendedGUID, OneStoreObject] = field(default_factory=dict)
+    section_display_name: str | None = None
+    order_index: int = 0
+
+
+@dataclass(slots=True)
+class RevisionRoleBinding:
+    rid: ExtendedGUID
+    context_id: ExtendedGUID | None
+    role: int
+    order_index: int
+
+
+@dataclass(slots=True)
 class ObjectSpaceState:
     gosid: ExtendedGUID
     root_roles: dict[int, ExtendedGUID] = field(default_factory=dict)
     objects: dict[ExtendedGUID, OneStoreObject] = field(default_factory=dict)
     section_display_name: str | None = None
+    revisions: list[RevisionManifestRecord] = field(default_factory=list)
+    role_bindings: list[RevisionRoleBinding] = field(default_factory=list)
+    latest_roots_by_context_role: dict[tuple[ExtendedGUID | None, int], ExtendedGUID] = field(default_factory=dict)
+    latest_revision_indices_by_context_role: dict[tuple[ExtendedGUID | None, int], int] = field(default_factory=dict)
+
+    def get_latest_root(self, role: int, context_id: ExtendedGUID | None = None) -> ExtendedGUID | None:
+        if self.latest_roots_by_context_role:
+            return self.latest_roots_by_context_role.get((context_id, role))
+        if context_id is None:
+            return self.root_roles.get(role)
+        return None
+
+    def iter_latest_roots(self, role: int) -> list[tuple[ExtendedGUID | None, ExtendedGUID]]:
+        if not self.latest_roots_by_context_role:
+            root = self.root_roles.get(role)
+            return [] if root is None else [(None, root)]
+        result: list[tuple[ExtendedGUID | None, ExtendedGUID]] = []
+        for (context_id, current_role), root in self.latest_roots_by_context_role.items():
+            if current_role == role:
+                result.append((context_id, root))
+        return result
+
+    def get_latest_revision_index(self, role: int, context_id: ExtendedGUID | None = None) -> int | None:
+        if self.latest_revision_indices_by_context_role:
+            return self.latest_revision_indices_by_context_role.get((context_id, role))
+        for index in range(len(self.revisions) - 1, -1, -1):
+            revision = self.revisions[index]
+            if revision.context_id != context_id:
+                continue
+            if _resolve_revision_root(self, revision, role) is not None:
+                return index
+        return None
 
 
 @dataclass(slots=True)
@@ -531,11 +582,23 @@ def _process_group(data: bytes, state: ObjectSpaceState, group_ref: tuple[int, i
                     state.section_display_name = value.decode("utf-16le", errors="ignore").rstrip("\x00") or state.section_display_name
 
 
-def _process_revision_manifest(data: bytes, state: ObjectSpaceState, nodes: list[FileNode]) -> None:
+def _process_revision_manifest(data: bytes, gosid: ExtendedGUID, nodes: list[FileNode], order_index: int) -> RevisionManifestRecord | None:
     gid_table: dict[int, str] = {}
+    temporary_state = ObjectSpaceState(gosid=gosid)
+    revision: RevisionManifestRecord | None = None
 
     for node in nodes:
-        if node.file_node_id == 0x024:
+        if node.file_node_id in {0x01B, 0x01E, 0x01F}:
+            rid = _read_extended_guid(node.payload, 0)
+            rid_dependent = _read_extended_guid(node.payload, 20) if len(node.payload) >= 40 else None
+            context_id = _read_extended_guid(node.payload, 40) if node.file_node_id == 0x01F and len(node.payload) >= 60 else None
+            revision = RevisionManifestRecord(
+                rid=rid,
+                rid_dependent=rid_dependent,
+                context_id=context_id,
+                order_index=order_index,
+            )
+        elif node.file_node_id == 0x024:
             index = struct.unpack_from("<I", node.payload, 0)[0]
             gid_table[index] = _read_guid(node.payload, 4)
         elif node.file_node_id == 0x025:
@@ -550,18 +613,147 @@ def _process_revision_manifest(data: bytes, state: ObjectSpaceState, nodes: list
                 if source in gid_table:
                     gid_table[target_start + index] = gid_table[source]
         elif node.file_node_id == 0x05A:
+            if revision is None:
+                continue
             root = _read_extended_guid(node.payload, 0)
             role = struct.unpack_from("<I", node.payload, 20)[0]
-            state.root_roles[role] = root
+            revision.root_roles[role] = root
         elif node.file_node_id == 0x059:
+            if revision is None:
+                continue
             compact_id = _read_compact_id(node.payload, 0)
             root = _resolve_object_id(compact_id, gid_table)
             role = struct.unpack_from("<I", node.payload, 4)[0]
             if root is not None:
-                state.root_roles[role] = root
+                revision.root_roles[role] = root
         elif node.file_node_id == 0x0B0:
+            if revision is None:
+                continue
             group_offset, group_size, _ = _decode_chunk_reference(node.payload, 0, node.stp_format, node.cb_format)
-            _process_group(data, state, (group_offset, group_size), gid_table)
+            _process_group(data, temporary_state, (group_offset, group_size), gid_table)
+
+    if revision is None:
+        return None
+
+    revision.objects = temporary_state.objects
+    revision.section_display_name = temporary_state.section_display_name
+    return revision
+
+
+def _is_zero_extended_guid(value: ExtendedGUID | None) -> bool:
+    return value is None or (value.guid == "00000000-0000-0000-0000-000000000000" and value.n == 0)
+
+
+def _iter_revision_chain(state: ObjectSpaceState, revision: RevisionManifestRecord) -> list[RevisionManifestRecord]:
+    revision_by_rid = {item.rid: item for item in state.revisions}
+    chain: list[RevisionManifestRecord] = []
+    seen: set[ExtendedGUID] = set()
+    current: RevisionManifestRecord | None = revision
+    while current is not None and current.rid not in seen:
+        seen.add(current.rid)
+        chain.append(current)
+        if _is_zero_extended_guid(current.rid_dependent):
+            break
+        current = revision_by_rid.get(current.rid_dependent)
+    chain.reverse()
+    return chain
+
+
+def _effective_revision_roots(state: ObjectSpaceState, revision: RevisionManifestRecord) -> dict[int, ExtendedGUID]:
+    roots: dict[int, ExtendedGUID] = {}
+    for item in _iter_revision_chain(state, revision):
+        roots.update(item.root_roles)
+    return roots
+
+
+def _resolve_revision_root(state: ObjectSpaceState, revision: RevisionManifestRecord, role: int) -> ExtendedGUID | None:
+    return _effective_revision_roots(state, revision).get(role)
+
+
+def _build_revision_snapshot(state: ObjectSpaceState, revision: RevisionManifestRecord) -> dict[ExtendedGUID, OneStoreObject]:
+    snapshot: dict[ExtendedGUID, OneStoreObject] = {}
+    for item in _iter_revision_chain(state, revision):
+        snapshot.update(item.objects)
+    return snapshot
+
+
+def _materialize_latest_roots(state: ObjectSpaceState) -> None:
+    latest: dict[tuple[ExtendedGUID | None, int], ExtendedGUID] = {}
+    revision_by_rid = {revision.rid: revision for revision in state.revisions}
+    revision_index_by_rid = {revision.rid: index for index, revision in enumerate(state.revisions)}
+    latest_revision_indices: dict[tuple[ExtendedGUID | None, int], int] = {}
+    ordered_events: list[tuple[int, str, object]] = []
+
+    for revision in state.revisions:
+        ordered_events.append((revision.order_index, "revision", revision))
+    for binding in state.role_bindings:
+        ordered_events.append((binding.order_index, "binding", binding))
+
+    for _, kind, payload in sorted(ordered_events, key=lambda item: item[0]):
+        if kind == "revision":
+            revision = payload
+            assert isinstance(revision, RevisionManifestRecord)
+            revision_index = revision_index_by_rid[revision.rid]
+            for role, root in _effective_revision_roots(state, revision).items():
+                latest[(revision.context_id, role)] = root
+                latest_revision_indices[(revision.context_id, role)] = revision_index
+            continue
+
+        binding = payload
+        assert isinstance(binding, RevisionRoleBinding)
+        revision = revision_by_rid.get(binding.rid)
+        if revision is None:
+            continue
+        root = _resolve_revision_root(state, revision, binding.role)
+        if root is not None:
+            latest[(binding.context_id, binding.role)] = root
+            latest_revision_indices[(binding.context_id, binding.role)] = revision_index_by_rid[revision.rid]
+
+    state.latest_roots_by_context_role = latest
+    state.latest_revision_indices_by_context_role = latest_revision_indices
+    state.root_roles = {role: root for (context_id, role), root in latest.items() if context_id is None}
+
+
+def _process_revision_manifest_list(data: bytes, state: ObjectSpaceState, nodes: list[FileNode]) -> None:
+    current_manifest: list[FileNode] | None = None
+    order_index = 0
+
+    for node in nodes:
+        if node.file_node_id in {0x01B, 0x01E, 0x01F}:
+            current_manifest = [node]
+            continue
+
+        if current_manifest is not None:
+            current_manifest.append(node)
+            if node.file_node_id == 0x01C:
+                revision = _process_revision_manifest(data, state.gosid, current_manifest, order_index)
+                if revision is not None:
+                    state.revisions.append(revision)
+                    if state.section_display_name is None and revision.section_display_name:
+                        state.section_display_name = revision.section_display_name
+                order_index += 1
+                current_manifest = None
+            continue
+
+        if node.file_node_id == 0x05C:
+            rid = _read_extended_guid(node.payload, 0)
+            role = struct.unpack_from("<I", node.payload, 20)[0]
+            state.role_bindings.append(RevisionRoleBinding(rid=rid, context_id=None, role=role, order_index=order_index))
+            order_index += 1
+        elif node.file_node_id == 0x05D:
+            rid = _read_extended_guid(node.payload, 0)
+            role = struct.unpack_from("<I", node.payload, 20)[0]
+            context_id = _read_extended_guid(node.payload, 24)
+            state.role_bindings.append(RevisionRoleBinding(rid=rid, context_id=context_id, role=role, order_index=order_index))
+            order_index += 1
+
+    _materialize_latest_roots(state)
+    preferred_revision_index = state.get_latest_revision_index(1)
+    if preferred_revision_index is None and state.revisions:
+        preferred_revision_index = len(state.revisions) - 1
+    if preferred_revision_index is not None:
+        preferred_revision = state.revisions[preferred_revision_index]
+        state.objects = _build_revision_snapshot(state, preferred_revision)
 
 
 def _parse_object_space(data: bytes, gosid: ExtendedGUID, list_ref: tuple[int, int]) -> ObjectSpaceState:
@@ -572,7 +764,7 @@ def _parse_object_space(data: bytes, gosid: ExtendedGUID, list_ref: tuple[int, i
             continue
         revision_offset, revision_size, _ = _decode_chunk_reference(node.payload, 0, node.stp_format, node.cb_format)
         revision_nodes = _parse_file_node_list(data, revision_offset, revision_size)
-        _process_revision_manifest(data, state, revision_nodes)
+        _process_revision_manifest_list(data, state, revision_nodes)
     return state
 
 
