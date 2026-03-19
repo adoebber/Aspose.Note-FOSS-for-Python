@@ -60,6 +60,7 @@ PDF_GOLDEN_CASES: tuple[PdfGoldenCase, ...] = (
     PdfGoldenCase("attached_file_with_tag", "AttachedFileWithTag.one"),
     PdfGoldenCase("formatted_richtext", "FormattedRichText.one"),
     PdfGoldenCase("image_with_tag", "ImageWithTag.one"),
+    PdfGoldenCase("page_with_subpage", "Issue1Subpages.one"),
     PdfGoldenCase("simple_table", "SimpleTable.one"),
     PdfGoldenCase("numbered_list_with_tags", "NumberedListWithTags.one"),
     PdfGoldenCase("images_with_alignment", "3ImagesWithDifferentAlignment.one"),

@@ -161,3 +161,53 @@ class TestAsposeNoteVisitor(unittest.TestCase):
 
         self.assertEqual(v.doc_start, 1)
         self.assertGreaterEqual(v.pages, 1)
+
+
+class TestAsposeNoteSubpages(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        p = _fixture_path("Issue1Subpages.one")
+        if p is None:
+            raise unittest.SkipTest("Issue1Subpages.one not found")
+        cls.path = p
+
+    def test_document_keeps_subpages_from_multiple_page_spaces(self) -> None:
+        from aspose.note import Document, Outline, OutlineElement, Page, RichText
+
+        doc = Document(self.path)
+        pages = doc.GetChildNodes(Page)
+
+        self.assertEqual(doc.Count(), 2)
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(
+            [page.Title.TitleText.Text if page.Title and page.Title.TitleText else None for page in pages],
+            ["Page1", "Subpage2"],
+        )
+        self.assertEqual([page.Level for page in pages], [1, 2])
+
+        page_texts: list[list[str]] = []
+        for page in pages:
+            texts: list[str] = []
+            for outline in page.GetChildNodes(Outline):
+                for outline_element in outline.GetChildNodes(OutlineElement):
+                    texts.extend(rich_text.Text for rich_text in outline_element.GetChildNodes(RichText) if rich_text.Text)
+            page_texts.append(texts)
+
+        self.assertEqual(page_texts, [["Content1"], ["Content2"]])
+
+
+class TestAsposeNoteSinglePageMetadataFallback(unittest.TestCase):
+    def test_single_page_fixtures_do_not_create_synthetic_titles(self) -> None:
+        from aspose.note import Document, Page
+
+        for fixture_name in ("SimpleTable.one", "3ImagesWithDifferentAlignment.one"):
+            path = _fixture_path(fixture_name)
+            if path is None:
+                raise unittest.SkipTest(f"{fixture_name} not found")
+
+            doc = Document(path)
+            pages = doc.GetChildNodes(Page)
+
+            self.assertEqual(len(pages), 1)
+            self.assertIsNone(pages[0].Title, fixture_name)
+            self.assertEqual(pages[0].Level, 1, fixture_name)

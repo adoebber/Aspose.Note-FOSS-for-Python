@@ -434,7 +434,7 @@ model:
         Author: {type:str|None,default:null,logic:page author}
         CreationTime: {type:datetime|None,default:null,logic:page creation timestamp}
         LastModifiedTime: {type:datetime|None,default:null,logic:page modification timestamp}
-        Level: {type:int|None,default:null,logic:page hierarchy level}
+        Level: {type:int|None,default:null,logic:page hierarchy level populated from PageNode/PageMetaData when present, including OneNote subpage levels}
         BackgroundColor: {type:int|None,default:null,logic:reserved compatibility member}
         Margin: {type:Any|None,default:null,logic:reserved compatibility member}
         SizeType: {type:Any|None,default:null,logic:reserved compatibility member}
@@ -462,7 +462,7 @@ model:
           loads parser document by path (onenote.Document.open) for str/Path source
           loads parser document by stream (onenote.Document.from_stream) otherwise
           stores loaded document display name in DisplayName
-          converts each parsed page and appends to children
+          materializes all current published pages from the available page content object spaces and appends them to children in section topology order when that order can be resolved
       members:
         DisplayName:
           type: str|None
@@ -485,7 +485,7 @@ model:
           logic: no-op compatibility method
         GetPageHistory:
           signature: (page:Page) -> list[Page]
-          logic: returns single-item list containing provided page
+          logic: returns the loaded published history for the provided page when LoadOptions.LoadHistory=true, otherwise returns a single-item list containing the provided page
         Save:
           signature: (target:str|Path|BinaryIO, format_or_options:Any=None) -> None
           format_resolution_logic[5]:

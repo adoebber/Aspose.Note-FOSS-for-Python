@@ -1093,7 +1093,12 @@ Time32:
 ; SectionObjectSpace (root)
 ;   └─ jcidSectionNode (default content root)
 ;       ├─ ElementChildNodesOfSection → jcidPageSeriesNode[]
-;       │   └─ jcidPageNode[]
+;       │   ├─ MetaDataObjectsAboveGraphSpace → jcidPageMetaData[]
+;       │   │   note: preserves page ordering, cached titles, and PageLevel/subpage hierarchy for the series
+;       │   └─ page content may reside in separate page object spaces rather than as direct PageNode children of the section object space
+;       │       mapping guidance: correlate PageSeries/PageMetaData records with page object spaces through NotebookManagementEntityGuid and topology ordering
+;       ├─ separate PageObjectSpace(s)
+;       │   └─ jcidPageManifestNode / jcidPageNode
 ;       │       ├─ jcidTitleNode (optional)
 ;       │       │   └─ jcidOutlineNode (IsTitleText=true)
 ;       │       │       └─ jcidOutlineElementNode
@@ -1107,7 +1112,7 @@ Time32:
 ;       │       │       └─ ElementChildNodesOfOutlineElement → jcidOutlineElementNode[] (nested)
 ;       │       └─ StructureElementChildNodes → jcidTitleNode
 ;       └─ jcidSectionMetaData (metadata root)
-;   └─ jcidPageMetaData (per-page metadata root)
+;   └─ jcidPageMetaData (per-page metadata root, frequently attached above a PageSeries graph and mirrored in page object spaces)
 
 ; =============================================================================
 ; 17. FSSHTTP TRANSMISSION CONSTANTS (section 2.7)

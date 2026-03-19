@@ -51,6 +51,18 @@ class LoadedOneNoteDocument:
     page_histories: list[list[Page]]
 
 
+@dataclass(slots=True)
+class _BuiltPageEntry:
+    oid: ExtendedGUID
+    page: Page
+    history: list[Page]
+    notebook_guid: bytes | None
+    topology_timestamp: int | None
+    section_order: int | None
+    space_order: int
+    page_order: int
+
+
 def _decode_utf16(value: Any) -> str | None:
     if value is None:
         return None
@@ -158,7 +170,8 @@ class _Builder:
         self._snapshot_cache: dict[int, dict[int, dict[ExtendedGUID, OneStoreObject]]] = {}
         self._revision_index_cache: dict[int, dict[ExtendedGUID, int]] = {}
         self.section_space = self._select_section_space(parsed)
-        self.content_space = self._select_content_space(parsed)
+        self.content_spaces = self._select_content_spaces(parsed)
+        self.content_space = self.content_spaces[0] if self.content_spaces else self._select_content_space(parsed)
         self.space = self.content_space or self.section_space
         self.current_revision_index = None
         self.objects = self.space.objects if self.space is not None else {}
@@ -167,9 +180,9 @@ class _Builder:
 
     def build(self) -> LoadedOneNoteDocument:
         logical_root = self._build_logical_root()
-        page_pairs = self._build_page_pairs(logical_root)
-        pages = [page for _, page in page_pairs]
-        page_histories = self._build_page_histories(page_pairs)
+        page_entries = self._build_current_page_entries()
+        pages = [entry.page for entry in page_entries]
+        page_histories = [entry.history for entry in page_entries]
         display_name = None
         if self.section_space and self.section_space.section_display_name:
             display_name = self.section_space.section_display_name
@@ -185,6 +198,20 @@ class _Builder:
             pages=pages,
             page_histories=page_histories,
         )
+
+    def _run_in_space(self, space, revision_index: int | None, callback):
+        saved_objects = self.objects
+        saved_space = self.space
+        saved_revision_index = self.current_revision_index
+        try:
+            self.space = space
+            self.current_revision_index = revision_index
+            self.objects = self._get_snapshot_objects(space, revision_index)
+            return callback()
+        finally:
+            self.objects = saved_objects
+            self.space = saved_space
+            self.current_revision_index = saved_revision_index
 
     def _select_current_revision_index(self, space):
         if space is None or not getattr(space, "revisions", None):
@@ -429,6 +456,32 @@ class _Builder:
                 best_score = score
         return best_space or self._select_section_space(parsed)
 
+    def _select_content_spaces(self, parsed: OneStoreFile) -> list:
+        candidates: list[tuple[int, int, Any]] = []
+        for index, space in enumerate(parsed.object_spaces):
+            if space is self.section_space:
+                continue
+            revision_index = self._select_current_revision_index(space)
+            if not self._is_page_revision(space, revision_index):
+                continue
+            snapshots = [space.objects]
+            snapshots.extend(revision.objects for revision in getattr(space, "revisions", []))
+            score = max(
+                (
+                    sum(
+                        1
+                        for obj in snapshot.values()
+                        if obj.jcid_name in {"PageNode", "OutlineNode", "RichTextOENode", "ImageNode", "TableNode", "EmbeddedFileNode"}
+                    )
+                    for snapshot in snapshots
+                ),
+                default=0,
+            )
+            candidates.append((index, score, space))
+
+        candidates.sort(key=lambda item: (-item[1], item[0]))
+        return [space for _, _, space in candidates]
+
     def _build_logical_root(self) -> LogicalNode | None:
         if self.space is None:
             return None
@@ -478,10 +531,13 @@ class _Builder:
         return result
 
     def _build_page_pairs(self, root: LogicalNode | None) -> list[tuple[ExtendedGUID, Page]]:
-        pages: list[tuple[ExtendedGUID, Page]] = []
+        return [(oid, page) for oid, _, page in self._build_page_infos(root)]
+
+    def _build_page_infos(self, root: LogicalNode | None) -> list[tuple[ExtendedGUID, LogicalNode, Page]]:
+        pages: list[tuple[ExtendedGUID, LogicalNode, Page]] = []
         for node in self._descendants(root):
             if node.kind == "PageNode":
-                pages.append((node.oid, self._build_page(node)))
+                pages.append((node.oid, node, self._build_page(node)))
         if pages:
             return pages
 
@@ -489,8 +545,137 @@ class _Builder:
         for oid in page_nodes:
             logical_page = self._build_logical_node(oid, set())
             if logical_page is not None:
-                pages.append((oid, self._build_page(logical_page)))
+                pages.append((oid, logical_page, self._build_page(logical_page)))
         return pages
+
+    def _build_page_infos_for_space(self, space, revision_index: int | None) -> list[tuple[ExtendedGUID, LogicalNode, Page]]:
+        def build_page_infos() -> list[tuple[ExtendedGUID, LogicalNode, Page]]:
+            root = self._get_snapshot_root(space, revision_index)
+            logical_root = self._build_logical_node(root, set()) if root is not None else None
+            return self._build_page_infos(logical_root)
+
+        return self._run_in_space(space, revision_index, build_page_infos)
+
+    def _build_page_histories_for_space(self, space, revision_index: int | None, page_pairs: list[tuple[ExtendedGUID, Page]]) -> list[list[Page]]:
+        return self._run_in_space(space, revision_index, lambda: self._build_page_histories(page_pairs))
+
+    def _page_metadata_candidates(self) -> list[OneStoreObject]:
+        return [record for record in self.objects.values() if record.jcid_name == "PageMetaData"]
+
+    def _page_metadata_from_node(self, node: LogicalNode) -> OneStoreObject | None:
+        metadata = self._find_metadata_record(node, "PageMetaData")
+        if metadata is not None:
+            return metadata
+
+        candidates = self._page_metadata_candidates()
+        if len(candidates) == 1:
+            return candidates[0]
+
+        record = self.objects.get(node.oid)
+        notebook_guid = record.properties.get("NotebookManagementEntityGuid") if record is not None else None
+        if isinstance(notebook_guid, bytes) and notebook_guid:
+            for candidate in candidates:
+                if candidate.properties.get("NotebookManagementEntityGuid") == notebook_guid:
+                    return candidate
+
+        return None
+
+    def _page_notebook_guid(self, node: LogicalNode) -> bytes | None:
+        metadata = self._page_metadata_from_node(node)
+        if metadata is not None:
+            notebook_guid = metadata.properties.get("NotebookManagementEntityGuid")
+            if isinstance(notebook_guid, bytes) and notebook_guid:
+                return notebook_guid
+        record = self.objects.get(node.oid)
+        if record is not None:
+            notebook_guid = record.properties.get("NotebookManagementEntityGuid")
+            if isinstance(notebook_guid, bytes) and notebook_guid:
+                return notebook_guid
+        return None
+
+    def _page_topology_timestamp(self, node: LogicalNode) -> int | None:
+        metadata = self._page_metadata_from_node(node)
+        if metadata is None:
+            return None
+        value = metadata.properties.get("TopologyCreationTimeStamp")
+        return int(value) if isinstance(value, int) else None
+
+    def _should_synthesize_page_title(self, node: LogicalNode) -> bool:
+        metadata = self._find_metadata_record(node, "PageMetaData")
+        if metadata is not None:
+            return True
+
+        section_orders = self._section_page_orders()
+        if len(section_orders) > 1:
+            return True
+
+        return False
+
+    def _section_page_orders(self) -> dict[bytes, int]:
+        if self.section_space is None:
+            return {}
+
+        section_revision_index = self._select_current_revision_index(self.section_space)
+
+        def collect_orders() -> dict[bytes, int]:
+            root = self._get_snapshot_root(self.section_space, section_revision_index)
+            logical_root = self._build_logical_node(root, set()) if root is not None else None
+            result: dict[bytes, int] = {}
+            next_order = 0
+            for node in self._descendants(logical_root):
+                if node.kind != "PageSeriesNode":
+                    continue
+                for metadata in node.metadata:
+                    record = self.objects.get(metadata.oid)
+                    if record is None or record.jcid_name != "PageMetaData":
+                        continue
+                    notebook_guid = record.properties.get("NotebookManagementEntityGuid")
+                    if not isinstance(notebook_guid, bytes) or not notebook_guid or notebook_guid in result:
+                        continue
+                    result[notebook_guid] = next_order
+                    next_order += 1
+            return result
+
+        return self._run_in_space(self.section_space, section_revision_index, collect_orders)
+
+    def _build_current_page_entries(self) -> list[_BuiltPageEntry]:
+        section_orders = self._section_page_orders()
+        candidate_spaces = self.content_spaces or ([self.content_space] if self.content_space is not None else [])
+        entries: list[_BuiltPageEntry] = []
+
+        for space_order, space in enumerate(candidate_spaces):
+            revision_index = self._select_current_revision_index(space)
+            page_infos = self._build_page_infos_for_space(space, revision_index)
+            if not page_infos:
+                continue
+            page_pairs = [(oid, page) for oid, _, page in page_infos]
+            histories = self._build_page_histories_for_space(space, revision_index, page_pairs)
+            for page_order, ((oid, logical_page, page), history) in enumerate(zip(page_infos, histories, strict=False)):
+                notebook_guid = self._page_notebook_guid(logical_page)
+                entries.append(
+                    _BuiltPageEntry(
+                        oid=oid,
+                        page=page,
+                        history=history,
+                        notebook_guid=notebook_guid,
+                        topology_timestamp=self._page_topology_timestamp(logical_page),
+                        section_order=section_orders.get(notebook_guid) if notebook_guid is not None else None,
+                        space_order=space_order,
+                        page_order=page_order,
+                    )
+                )
+
+        entries.sort(
+            key=lambda entry: (
+                entry.section_order is None,
+                entry.section_order if entry.section_order is not None else 0,
+                entry.topology_timestamp is None,
+                entry.topology_timestamp if entry.topology_timestamp is not None else 0,
+                entry.space_order,
+                entry.page_order,
+            )
+        )
+        return entries
 
     def _build_page_pairs_for_revision(self, space, revision_index: int) -> list[tuple[ExtendedGUID, Page]]:
         saved_objects = self.objects
@@ -527,7 +712,7 @@ class _Builder:
     def _build_page(self, node: LogicalNode) -> Page:
         page = Page()
         record = self.objects.get(node.oid)
-        metadata = self._find_metadata_record(node, "PageMetaData")
+        metadata = self._page_metadata_from_node(node)
         if record is not None:
             page.Author = _decode_utf16(record.properties.get("Author"))
             page.CreationTime = _time32_to_datetime(record.properties.get("CreationTimeStamp"))
@@ -554,7 +739,7 @@ class _Builder:
             if public_child is not None:
                 page.AppendChildLast(public_child)
 
-        if page.Title is None:
+        if page.Title is None and self._should_synthesize_page_title(node):
             title_text = None
             if metadata is not None:
                 title_text = _decode_utf16(metadata.properties.get("CachedTitleString")) or _decode_utf16(metadata.properties.get("CachedTitleStringFromPage"))
