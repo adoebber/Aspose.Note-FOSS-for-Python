@@ -31,7 +31,8 @@ class TestAsposeNoteDocumentBasics(unittest.TestCase):
         from aspose.note import Document
 
         doc = Document(self.path)
-        self.assertGreater(doc.Count(), 0)
+        self.assertFalse(hasattr(doc, "Count"))
+        self.assertGreater(len(list(doc)), 0)
         self.assertIsNotNone(doc.FirstChild)
         self.assertIsNotNone(doc.LastChild)
 
@@ -39,7 +40,7 @@ class TestAsposeNoteDocumentBasics(unittest.TestCase):
         from aspose.note import Document
 
         doc = Document(io.BytesIO(self.data))
-        self.assertGreater(doc.Count(), 0)
+        self.assertGreater(len(list(doc)), 0)
 
     def test_document_file_format_enum(self) -> None:
         from aspose.note import Document, FileFormat
@@ -99,9 +100,10 @@ class TestAsposeNoteRichTextOperations(unittest.TestCase):
         from aspose.note import Document, RichText
 
         doc = Document(self.path)
-        rich_text = next(rt for rt in doc.GetChildNodes(RichText) if rt.Runs)
+        rich_text = next(rt for rt in doc.GetChildNodes(RichText) if rt.TextRuns)
 
-        self.assertIs(rich_text.TextRuns, rich_text.Runs)
+        self.assertFalse(hasattr(rich_text, "Runs"))
+        self.assertGreater(len(rich_text.TextRuns), 0)
         self.assertEqual(rich_text.Length, len(rich_text.Text))
 
 
@@ -177,7 +179,7 @@ class TestAsposeNoteSubpages(unittest.TestCase):
         doc = Document(self.path)
         pages = doc.GetChildNodes(Page)
 
-        self.assertEqual(doc.Count(), 2)
+        self.assertEqual(len(list(doc)), 2)
         self.assertEqual(len(pages), 2)
         self.assertEqual(
             [page.Title.TitleText.Text if page.Title and page.Title.TitleText else None for page in pages],

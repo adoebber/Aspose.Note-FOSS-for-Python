@@ -26,13 +26,30 @@ def _fixture_path(name: str) -> Path | None:
 
 
 class TestAsposeNoteSaveOptions(unittest.TestCase):
+    def test_save_options_is_abstract_compatibility_base(self) -> None:
+        from aspose.note import SaveFormat
+        from aspose.note.saving import SaveOptions
+
+        with self.assertRaises(TypeError):
+            SaveOptions(SaveFormat.Pdf)
+
+    def test_root_namespace_does_not_export_save_options(self) -> None:
+        import aspose.note
+
+        self.assertFalse(hasattr(aspose.note, "SaveOptions"))
+        self.assertFalse(hasattr(aspose.note, "PdfSaveOptions"))
+
     def test_pdf_save_options_roundtrip(self) -> None:
-        from aspose.note import PdfSaveOptions, SaveFormat
+        from aspose.note import SaveFormat
+        from aspose.note.saving import PdfSaveOptions
 
         opts = PdfSaveOptions()
         self.assertEqual(opts.SaveFormat, SaveFormat.Pdf)
         self.assertEqual(opts.PageIndex, 0)
         self.assertIsNone(opts.PageCount)
+        self.assertFalse(hasattr(opts, "TagIconDir"))
+        self.assertFalse(hasattr(opts, "TagIconSize"))
+        self.assertFalse(hasattr(opts, "TagIconGap"))
 
     def test_save_format_exports_only_pdf(self) -> None:
         from aspose.note import SaveFormat
@@ -40,13 +57,23 @@ class TestAsposeNoteSaveOptions(unittest.TestCase):
         self.assertEqual(list(SaveFormat), [SaveFormat.Pdf])
 
     def test_save_options_expose_common_base_properties(self) -> None:
-        from aspose.note import PdfSaveOptions, SaveFormat
+        from aspose.note import SaveFormat
+        from aspose.note.saving import PdfSaveOptions
 
         opts = PdfSaveOptions(PageIndex=2, PageCount=3, FontsSubsystem="fonts-subsystem")
         self.assertEqual(opts.SaveFormat, SaveFormat.Pdf)
         self.assertEqual(opts.PageIndex, 2)
         self.assertEqual(opts.PageCount, 3)
         self.assertEqual(opts.FontsSubsystem, "fonts-subsystem")
+
+    def test_save_format_is_read_only(self) -> None:
+        from aspose.note import SaveFormat
+        from aspose.note.saving import PdfSaveOptions
+
+        opts = PdfSaveOptions()
+
+        with self.assertRaises(AttributeError):
+            setattr(opts, "SaveFormat", SaveFormat.Pdf)
 
 
 @unittest.skipUnless(HAS_REPORTLAB, "reportlab not installed")
@@ -59,7 +86,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         cls.path = p
 
     def test_save_pdf_with_pdfsaveoptions(self) -> None:
-        from aspose.note import Document, PdfSaveOptions
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
 
         doc = Document(self.path)
         buf = io.BytesIO()
@@ -79,7 +107,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertTrue(output.read_bytes().startswith(b"%PDF"))
 
     def test_pdf_writer_renders_note_tags(self) -> None:
-        from aspose.note import Document, NoteTag, Page, PdfSaveOptions, RichText, SaveFormat
+        from aspose.note import Document, NoteTag, Page, RichText
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -127,12 +156,13 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
                 self._buffer.write(b"%PDF-fake")
 
         tagged = RichText(Text="Tagged body")
-        tagged.Tags = [
-            NoteTag(shape=13, label="Важно"),
-            NoteTag(shape=3, label="Дела"),
-            NoteTag(shape=121, label="Послушать музыку"),
-            NoteTag(shape=999, label="XY"),
-        ]
+        tagged.Tags.extend(
+            [
+            NoteTag.CreateYellowStar("Важно"),
+            NoteTag.CreateQuestionMark("Вопрос"),
+            NoteTag.CreateMusicalNote("Послушать музыку"),
+            ]
+        )
 
         doc = Document()
         page = Page()
@@ -140,7 +170,7 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         doc.AppendChildLast(page)
 
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         canvas = FakeCanvas.instances[0]
         self.assertIn("Tagged body", canvas.drawn_strings)
@@ -148,7 +178,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertTrue(canvas.line_calls)
 
     def test_pdf_writer_renders_tags_in_visual_reverse_order(self) -> None:
-        from aspose.note import Document, NoteTag, Page, PdfSaveOptions, RichText, SaveFormat
+        from aspose.note import Document, NoteTag, Page, RichText
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving import pdf_writer
 
         class FakeCanvas:
@@ -187,11 +218,13 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
                 self._buffer.write(b"%PDF-fake")
 
         tagged = RichText(Text="Tagged body")
-        tagged.Tags = [
-            NoteTag(shape=13, label="Важно"),
-            NoteTag(shape=15, label="Вопрос"),
-            NoteTag(shape=3, label="Дела"),
-        ]
+        tagged.Tags.extend(
+            [
+            NoteTag.CreateYellowStar("Важно"),
+            NoteTag.CreateQuestionMark("Вопрос"),
+            NoteTag.CreateMusicalNote("Послушать музыку"),
+            ]
+        )
 
         doc = Document()
         page = Page()
@@ -201,13 +234,13 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         rendered_shapes: list[int | None] = []
 
         def _capture_tag(pdf, tag, x: float, baseline_y: float, options):
-            rendered_shapes.append(getattr(tag, "shape", None))
+            rendered_shapes.append(getattr(tag, "Icon", None))
             return 10.0
 
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas), patch.object(pdf_writer, "_render_note_tag", side_effect=_capture_tag):
-            pdf_writer.write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            pdf_writer.write_pdf(doc, PdfSaveOptions())
 
-        self.assertEqual(rendered_shapes, [3, 15, 13])
+        self.assertEqual(rendered_shapes, [121, 15, 13])
 
     def test_question_tag_uses_distinct_color(self) -> None:
         from aspose.note.saving.pdf_writer import _tag_color
@@ -216,7 +249,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertNotEqual(_tag_color(15), _tag_color(13))
 
     def test_pdf_writer_does_not_duplicate_rich_text(self) -> None:
-        from aspose.note import Document, Page, PdfSaveOptions, RichText, SaveFormat, Title
+        from aspose.note import Document, Page, RichText, Title
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -270,16 +304,16 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         doc = Document()
         page = Page()
         title = Title()
-        title.TitleText = title.AppendChildLast(RichText(Text="Title text"))
-        title.TitleDate = title.AppendChildLast(RichText(Text="2025-01-01"))
-        title.TitleTime = title.AppendChildLast(RichText(Text="10:00"))
+        title.TitleText = RichText(Text="Title text")
+        title.TitleDate = RichText(Text="2025-01-01")
+        title.TitleTime = RichText(Text="10:00")
         page.Title = title
         page.AppendChildLast(title)
         page.AppendChildLast(RichText(Text="Body text"))
         doc.AppendChildLast(page)
 
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         self.assertEqual(len(FakeCanvas.instances), 1)
         self.assertEqual(FakeCanvas.instances[0].drawn_strings.count("Title text"), 1)
@@ -288,7 +322,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertEqual(FakeCanvas.instances[0].drawn_strings.count("Body text"), 1)
 
     def test_pdf_writer_applies_rich_text_run_styles(self) -> None:
-        from aspose.note import Document, Page, PdfSaveOptions, RichText, SaveFormat, TextRun, TextStyle
+        from aspose.note import Document, Page, RichText, TextRun, TextStyle
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -339,21 +374,18 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
             def save(self) -> None:
                 self._buffer.write(b"%PDF-fake")
 
-        styled = RichText(Text="Bold Blue")
-        styled.Runs = [
+        styled = RichText(
+            TextRuns=[
             TextRun(
                 Text="Bold",
-                Style=TextStyle(Bold=True, FontColor=0x0000FF, HighlightColor=0xFFFF00, Underline=True),
-                Start=0,
-                End=4,
+                Style=TextStyle(IsBold=True, FontColor=0x0000FF, Highlight=0xFFFF00, IsUnderline=True),
             ),
             TextRun(
                 Text=" Blue",
-                Style=TextStyle(Italic=True, FontName="Times New Roman", FontSize=14.0),
-                Start=4,
-                End=9,
+                Style=TextStyle(IsItalic=True, FontName="Times New Roman", FontSize=14.0),
             ),
-        ]
+            ]
+        )
 
         doc = Document()
         page = Page()
@@ -361,7 +393,7 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         doc.AppendChildLast(page)
 
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         canvas = FakeCanvas.instances[0]
         self.assertEqual(canvas.drawn_strings.count("Bold"), 1)
@@ -374,7 +406,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertTrue(canvas.line_calls)
 
     def test_pdf_writer_preserves_spaces_and_inline_metadata(self) -> None:
-        from aspose.note import Document, Page, PdfSaveOptions, RichText, SaveFormat, Title
+        from aspose.note import Document, Page, RichText, Title
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -422,16 +455,16 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         doc = Document()
         page = Page()
         title = Title()
-        title.TitleText = title.AppendChildLast(RichText(Text="One hyperlink"))
-        title.TitleDate = title.AppendChildLast(RichText(Text="2025-01-01"))
-        title.TitleTime = title.AppendChildLast(RichText(Text="13:12"))
+        title.TitleText = RichText(Text="One hyperlink")
+        title.TitleDate = RichText(Text="2025-01-01")
+        title.TitleTime = RichText(Text="13:12")
         page.Title = title
         page.AppendChildLast(title)
         page.AppendChildLast(RichText(Text="This is hyperlink."))
         doc.AppendChildLast(page)
 
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         canvas = FakeCanvas.instances[0]
         texts = [text for _, _, text in canvas.drawn_strings]
@@ -444,7 +477,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertGreater(time_call[0], date_call[0])
 
     def test_pdf_writer_converts_image_size_from_centimeters_to_points(self) -> None:
-        from aspose.note import Document, Image, Page, PdfSaveOptions, SaveFormat
+        from aspose.note import Document, Image, Page
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -502,7 +536,7 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         doc.AppendChildLast(page)
 
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas), patch("reportlab.lib.utils.ImageReader", FakeImageReader):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         canvas = FakeCanvas.instances[0]
         self.assertEqual(len(canvas.image_calls), 1)
@@ -515,7 +549,8 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
         self.assertEqual(mask, "auto")
 
     def test_pdf_writer_skips_internal_hyperlink_markup(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -562,14 +597,15 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
 
         doc = Document(self.path)
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         rendered_text = "".join(FakeCanvas.instances[0].drawn_strings)
         self.assertNotIn("HYPERLINK", rendered_text)
         self.assertNotIn("\ufddf", rendered_text)
 
     def test_pdf_writer_creates_clickable_hyperlinks(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -617,14 +653,15 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
 
         doc = Document(self.path)
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         canvas = FakeCanvas.instances[0]
         self.assertTrue(canvas.link_calls)
         self.assertTrue(any(url == "https://www.google.com" for url, _, _ in canvas.link_calls))
 
     def test_pdf_writer_applies_default_hyperlink_style(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
         from aspose.note.saving.pdf_writer import write_pdf
 
         class FakeCanvas:
@@ -673,7 +710,7 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
 
         doc = Document(self.path)
         with patch("reportlab.pdfgen.canvas.Canvas", FakeCanvas):
-            write_pdf(doc, PdfSaveOptions(SaveFormat.Pdf))
+            write_pdf(doc, PdfSaveOptions())
 
         canvas = FakeCanvas.instances[0]
         self.assertIn("hyperlink", canvas.drawn_strings)
@@ -689,7 +726,7 @@ class TestAsposeNoteSaveWithOptions(unittest.TestCase):
     def test_pdf_writer_uses_unicode_font_for_cyrillic(self) -> None:
         from aspose.note.saving.pdf_writer import _REGISTERED_FONT_NAMES, _font_name_for_style
 
-        style = SimpleNamespace(FontName=None, Bold=False, Italic=False)
+        style = SimpleNamespace(FontName=None, IsBold=False, IsItalic=False)
         _REGISTERED_FONT_NAMES.clear()
         self.addCleanup(_REGISTERED_FONT_NAMES.clear)
 

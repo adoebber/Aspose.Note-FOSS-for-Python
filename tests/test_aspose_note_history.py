@@ -87,7 +87,8 @@ class TestAsposeNoteHistory(unittest.TestCase):
 
         history = doc.GetPageHistory(page)
 
-        self.assertEqual([_page_body_text(item) for item in history], ["", "First text", "Second text", "Third text"])
+        self.assertEqual(_page_body_text(history.Current), "Third text")
+        self.assertEqual([_page_body_text(item) for item in history], ["", "First text", "Second text"])
 
     def test_parser_materializes_incremental_current_roots(self) -> None:
         from aspose.note._internal.onestore.parser import parse_onestore_file
@@ -120,7 +121,8 @@ class TestAsposeNoteHistory(unittest.TestCase):
         texts = [_page_body_text(item) for item in history]
 
         self.assertEqual(_page_body_text(page), "0")
-        self.assertEqual(texts, ["", "fdf", "0"])
+        self.assertEqual(_page_body_text(history.Current), "0")
+        self.assertEqual(texts, ["", "fdf"])
 
     def test_simple_table_published_history_matches_ui_structure(self) -> None:
         from aspose.note import Document, LoadOptions, Page
@@ -133,7 +135,8 @@ class TestAsposeNoteHistory(unittest.TestCase):
         current_page = doc.GetChildNodes(Page)[0]
         history = doc.GetPageHistory(current_page)
 
-        self.assertEqual(len(history), 3)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history.Current, current_page)
         self.assertEqual(
             _table_grid(current_page),
             [["1", "2", "3"], ["6", "5", "4"], ["7", "8", "9"], ["b", "a", "0"]],
@@ -160,6 +163,6 @@ class TestAsposeNoteHistory(unittest.TestCase):
         texts = [_page_body_text(item) for item in history]
 
         self.assertEqual(_page_body_text(page), "Image in the outline with left alignment")
+        self.assertEqual(_page_body_text(history.Current), "Image in the outline with left alignment")
         self.assertEqual(texts[:3], ["", "fdf", "0"])
-        self.assertTrue(all(text == "tt" for text in texts[3:-1]))
-        self.assertEqual(texts[-1], "Image in the outline with left alignment")
+        self.assertTrue(all(text == "tt" for text in texts[3:]))

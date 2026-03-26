@@ -11,5 +11,10 @@ if str(SRC) not in sys.path:
 
 class TestImportsSmoke(unittest.TestCase):
     def test_imports_smoke(self) -> None:
-        import aspose.note  # noqa: F401
-        from aspose.note import Document, Outline, Page, RichText  # noqa: F401
+        import aspose.note
+        import aspose.note.saving  # noqa: F401
+        from aspose.note import Document, Outline, Page, ParagraphStyle, RichText  # noqa: F401
+        from aspose.note.saving import PdfSaveOptions, SaveOptions  # noqa: F401
+
+        self.assertFalse(hasattr(aspose.note, "SaveOptions"))
+        self.assertFalse(hasattr(aspose.note, "PdfSaveOptions"))

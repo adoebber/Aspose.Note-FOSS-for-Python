@@ -65,6 +65,39 @@ class TestAsposeNoteImages(unittest.TestCase):
 
         self.assertEqual(image.OriginalWidth, image.Width)
         self.assertEqual(image.OriginalHeight, image.Height)
+        self.assertFalse(hasattr(image, "HorizontalAlignment"))
+
+    def test_image_uses_alignment_without_legacy_alias(self) -> None:
+        from aspose.note import HorizontalAlignment, Image
+
+        image = Image(Bytes=b"img", Width=10.0, Height=20.0, Alignment=HorizontalAlignment.Center)
+
+        self.assertEqual(image.Alignment, HorizontalAlignment.Center)
+        self.assertFalse(hasattr(image, "HorizontalAlignment"))
+
+    def test_image_read_only_metadata_stays_mutable_via_tags_collection(self) -> None:
+        from aspose.note import Image, NoteTag
+
+        image = Image(
+            FileName="image.png",
+            FilePath="C:/tmp/image.png",
+            Format="png",
+            Bytes=b"img",
+            Width=10.0,
+            Height=20.0,
+            OriginalWidth=10.0,
+            OriginalHeight=20.0,
+            Tags=[NoteTag.CreateYellowStar("Важно")],
+        )
+
+        with self.assertRaises(AttributeError):
+            image.FileName = "renamed.png"
+
+        with self.assertRaises(AttributeError):
+            image.Bytes = b"other"
+
+        image.Tags.append(NoteTag.CreateQuestionMark("Вопрос"))
+        self.assertEqual([tag.Label for tag in image.Tags], ["Важно", "Вопрос"])
 
 
 class TestAsposeNoteTables(unittest.TestCase):
@@ -91,6 +124,23 @@ class TestAsposeNoteTables(unittest.TestCase):
         for row in rows[:10]:
             self.assertGreaterEqual(len(list(row)), 1)
 
+    def test_table_collections_are_read_only_properties(self) -> None:
+        from aspose.note import NoteTag, Table, TableColumn
+
+        table = Table(Tags=[NoteTag.CreateYellowStar("Важно")], Columns=[TableColumn(Width=70)])
+
+        with self.assertRaises(AttributeError):
+            table.Tags = []
+
+        with self.assertRaises(AttributeError):
+            table.Columns = []
+
+        table.Tags.append(NoteTag.CreateQuestionMark("Вопрос"))
+        table.Columns.append(TableColumn(Width=120))
+
+        self.assertEqual([tag.Label for tag in table.Tags], ["Важно", "Вопрос"])
+        self.assertEqual([column.Width for column in table.Columns], [70, 120])
+
 
 class TestAsposeNoteAttachments(unittest.TestCase):
     @classmethod
@@ -112,3 +162,17 @@ class TestAsposeNoteAttachments(unittest.TestCase):
 
         # Bytes are best-effort in current implementation (may be empty for some fixtures).
         self.assertTrue(all(isinstance(a.Bytes, (bytes, bytearray)) for a in atts))
+
+    def test_attached_file_metadata_is_read_only(self) -> None:
+        from aspose.note import AttachedFile, NoteTag
+
+        attached = AttachedFile(FileName="doc.bin", Bytes=b"abc", Tags=[NoteTag.CreateYellowStar("Важно")])
+
+        with self.assertRaises(AttributeError):
+            attached.FileName = "other.bin"
+
+        with self.assertRaises(AttributeError):
+            attached.Bytes = b"xyz"
+
+        attached.Tags.append(NoteTag.CreateQuestionMark("Вопрос"))
+        self.assertEqual([tag.Label for tag in attached.Tags], ["Важно", "Вопрос"])

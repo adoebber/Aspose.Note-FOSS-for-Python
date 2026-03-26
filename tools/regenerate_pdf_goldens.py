@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from aspose.note import Document, PdfSaveOptions, SaveFormat
+from aspose.note import Document
+from aspose.note.saving import PdfSaveOptions
 from tests._pdf_goldens import (
     PDF_GOLDEN_CASES,
     build_pdf_manifest,
@@ -55,7 +56,7 @@ def main() -> int:
 
         output_pdf = golden_pdf_path(case.case_id)
         output_pdf.parent.mkdir(parents=True, exist_ok=True)
-        Document(source).Save(str(output_pdf), PdfSaveOptions(SaveFormat.Pdf))
+        Document(source).Save(str(output_pdf), PdfSaveOptions())
 
         manifest = build_pdf_manifest(output_pdf, fixture_name=case.fixture_name)
         write_manifest(golden_manifest_path(case.case_id), manifest)

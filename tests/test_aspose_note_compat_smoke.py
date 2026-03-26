@@ -34,8 +34,9 @@ class TestAsposeNoteImports(unittest.TestCase):
             FileFormat,
             License,
             Metered,
-            PdfSaveOptions,
+            ParagraphStyle,
         )
+        from aspose.note.saving import PdfSaveOptions  # noqa: F401
 
 
 class TestAsposeNoteTitleIsTraversable(unittest.TestCase):
@@ -70,13 +71,16 @@ class TestAsposeNoteOutlineCoordinatesAreExposed(unittest.TestCase):
         self.assertGreaterEqual(len(outlines), 1)
 
         o = outlines[0]
-        self.assertTrue(hasattr(o, "X"))
-        self.assertTrue(hasattr(o, "Y"))
-        self.assertTrue(hasattr(o, "Width"))
+        self.assertTrue(hasattr(o, "HorizontalOffset"))
+        self.assertTrue(hasattr(o, "VerticalOffset"))
+        self.assertTrue(hasattr(o, "MaxWidth"))
+        self.assertFalse(hasattr(o, "X"))
+        self.assertFalse(hasattr(o, "Y"))
+        self.assertFalse(hasattr(o, "Width"))
 
-        self.assertTrue(o.X is None or isinstance(o.X, float))
-        self.assertTrue(o.Y is None or isinstance(o.Y, float))
-        self.assertTrue(o.Width is None or isinstance(o.Width, float))
+        self.assertTrue(o.HorizontalOffset is None or isinstance(o.HorizontalOffset, float))
+        self.assertTrue(o.VerticalOffset is None or isinstance(o.VerticalOffset, float))
+        self.assertTrue(o.MaxWidth is None or isinstance(o.MaxWidth, float))
 
 
 @unittest.skipUnless(HAS_REPORTLAB, "reportlab not installed")
@@ -92,7 +96,8 @@ class TestAsposeNoteDocumentSavePdf(unittest.TestCase):
         from aspose.note import Document, SaveFormat
 
         doc = Document(self.path)
-        self.assertGreater(doc.Count(), 0)
+        self.assertFalse(hasattr(doc, "Count"))
+        self.assertGreater(len(list(doc)), 0)
 
         buf = io.BytesIO()
         doc.Save(buf, SaveFormat.Pdf)

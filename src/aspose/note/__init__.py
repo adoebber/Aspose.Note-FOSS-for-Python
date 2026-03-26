@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from .enums import FileFormat, HorizontalAlignment, NodeType, SaveFormat
+from .enums import FileFormat, HorizontalAlignment, NodeType, SaveFormat, TagStatus
 from .exceptions import (
-    AsposeNoteError,
     FileCorruptedException,
     IncorrectDocumentStructureException,
     IncorrectPasswordException,
@@ -11,7 +10,6 @@ from .exceptions import (
 )
 from .model import (
     AttachedFile,
-    CompositeNode,
     Document,
     DocumentVisitor,
     Image,
@@ -23,19 +21,20 @@ from .model import (
     NumberList,
     Outline,
     OutlineElement,
+    ParagraphStyle,
+    PageHistory,
     Page,
     RichText,
     Table,
     TableCell,
+    TableColumn,
     TableRow,
     TextRun,
     TextStyle,
     Title,
 )
-from .saving.options import PdfSaveOptions, SaveOptions
 
 __all__ = [
-    "AsposeNoteError",
     "FileCorruptedException",
     "IncorrectDocumentStructureException",
     "IncorrectPasswordException",
@@ -44,14 +43,15 @@ __all__ = [
     "SaveFormat",
     "FileFormat",
     "HorizontalAlignment",
+    "TagStatus",
     "NodeType",
     "DocumentVisitor",
     "License",
     "Metered",
     "LoadOptions",
     "Node",
-    "CompositeNode",
     "NoteTag",
+    "ParagraphStyle",
     "TextStyle",
     "TextRun",
     "RichText",
@@ -61,11 +61,11 @@ __all__ = [
     "Outline",
     "Image",
     "AttachedFile",
+    "TableColumn",
     "TableCell",
     "TableRow",
     "Table",
     "Page",
+    "PageHistory",
     "Document",
-    "SaveOptions",
-    "PdfSaveOptions",
 ]

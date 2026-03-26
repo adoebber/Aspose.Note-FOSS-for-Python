@@ -17,9 +17,11 @@ from ...model import (
     NumberList,
     Outline,
     OutlineElement,
+    ParagraphStyle,
     Page,
     RichText,
     Table,
+    TableColumn,
     TableCell,
     TableRow,
     TextRun,
@@ -155,7 +157,7 @@ def _unique_tags(tags: list[NoteTag]) -> list[NoteTag]:
     seen: set[tuple[Any, ...]] = set()
     result: list[NoteTag] = []
     for tag in tags:
-        key = (tag.label, tag.shape, tag.text_color, tag.highlight_color, tag.created, tag.completed)
+        key = (tag.Label, tag.Icon, tag.FontColor, tag.Highlight, tag.CreationTime, tag.CompletedTime)
         if key in seen:
             continue
         seen.add(key)
@@ -745,8 +747,7 @@ class _Builder:
                 title_text = _decode_utf16(metadata.properties.get("CachedTitleString")) or _decode_utf16(metadata.properties.get("CachedTitleStringFromPage"))
             if title_text:
                 title = Title()
-                title.TitleText = RichText(Text=title_text, Runs=[TextRun(Text=title_text, Start=0, End=len(title_text))])
-                title.AppendChildLast(title.TitleText)
+                title.TitleText = RichText(Text=title_text, TextRuns=[TextRun(Text=title_text)])
                 page.Title = title
                 page.AppendChildFirst(title)
 
@@ -760,13 +761,10 @@ class _Builder:
         richtexts = self._collect_richtexts(node)
         if richtexts:
             title.TitleText = self._build_richtext(richtexts[0])
-            title.AppendChildLast(title.TitleText)
         if len(richtexts) > 1:
             title.TitleDate = self._build_richtext(richtexts[1])
-            title.AppendChildLast(title.TitleDate)
         if len(richtexts) > 2:
             title.TitleTime = self._build_richtext(richtexts[2])
-            title.AppendChildLast(title.TitleTime)
         return title
 
     def _build_public_node(self, node: LogicalNode):
@@ -801,19 +799,17 @@ class _Builder:
     def _build_outline(self, node: LogicalNode) -> Outline:
         record = self.objects[node.oid]
         outline = Outline(
-            X=_u32_to_float(record.properties.get("OffsetFromParentHoriz")),
-            Y=_u32_to_float(record.properties.get("OffsetFromParentVert")),
-            Width=_u32_to_float(record.properties.get("LayoutMaxWidth")),
+            HorizontalOffset=_u32_to_float(record.properties.get("OffsetFromParentHoriz")),
+            VerticalOffset=_u32_to_float(record.properties.get("OffsetFromParentVert")),
+            MaxWidth=_u32_to_float(record.properties.get("LayoutMaxWidth")),
         )
         self._append_public_children(outline, node)
         return outline
 
     def _build_outline_element(self, node: LogicalNode) -> OutlineElement:
         record = self.objects[node.oid]
-        outline_element = OutlineElement(
-            IndentLevel=int(record.properties.get("OutlineElementChildLevel") or 0),
-            Tags=self._collect_tags(record),
-        )
+        outline_element = OutlineElement()
+        outline_tags = self._collect_tags(record)
 
         list_nodes = [child for child in node.children if child.kind == "NumberListNode"]
         if list_nodes:
@@ -825,8 +821,8 @@ class _Builder:
         for child in ordered_children:
             public_child = self._build_public_node(child)
             if public_child is not None:
-                if isinstance(public_child, RichText) and not public_child.Tags and outline_element.Tags:
-                    public_child.Tags = list(outline_element.Tags)
+                if isinstance(public_child, RichText) and not public_child.Tags and outline_tags:
+                    public_child.Tags.extend(outline_tags)
                 outline_element.AppendChildLast(public_child)
         return outline_element
 
@@ -839,23 +835,41 @@ class _Builder:
                 return target.properties
         return {}
 
-    def _style_from_properties(self, properties: Any) -> TextStyle:
+    def _paragraph_style_from_properties(self, properties: Any) -> ParagraphStyle:
+        resolved = self._resolve_style_properties(properties)
+        return ParagraphStyle(
+            FontName=_decode_utf16(resolved.get("Font")),
+            FontSize=(float(resolved["FontSize"]) / 2.0) if isinstance(resolved.get("FontSize"), int) else None,
+            FontColor=resolved.get("FontColor") if isinstance(resolved.get("FontColor"), int) else None,
+            Highlight=resolved.get("Highlight") if isinstance(resolved.get("Highlight"), int) else None,
+            IsBold=bool(resolved.get("Bold")),
+            IsItalic=bool(resolved.get("Italic")),
+            IsUnderline=bool(resolved.get("Underline")),
+            IsStrikethrough=bool(resolved.get("Strikethrough")),
+            IsSuperscript=bool(resolved.get("Superscript")),
+            IsSubscript=bool(resolved.get("Subscript")),
+        )
+
+    def _paragraph_alignment_from_properties(self, properties: Any) -> HorizontalAlignment | None:
+        resolved = self._resolve_style_properties(properties)
+        return _decode_paragraph_alignment(resolved.get("ParagraphAlignment"))
+
+    def _text_style_from_properties(self, properties: Any) -> TextStyle:
         resolved = self._resolve_style_properties(properties)
         return TextStyle(
             IsHyperlink=bool(resolved.get("Hyperlink") or resolved.get("WzHyperlinkUrl")),
             HyperlinkAddress=_decode_utf16(resolved.get("WzHyperlinkUrl")),
-            HorizontalAlignment=_decode_paragraph_alignment(resolved.get("ParagraphAlignment")),
             FontName=_decode_utf16(resolved.get("Font")),
             FontSize=(float(resolved["FontSize"]) / 2.0) if isinstance(resolved.get("FontSize"), int) else None,
             FontColor=resolved.get("FontColor") if isinstance(resolved.get("FontColor"), int) else None,
-            HighlightColor=resolved.get("Highlight") if isinstance(resolved.get("Highlight"), int) else None,
-            LanguageId=resolved.get("LanguageID") if isinstance(resolved.get("LanguageID"), int) else None,
-            Bold=bool(resolved.get("Bold")),
-            Italic=bool(resolved.get("Italic")),
-            Underline=bool(resolved.get("Underline")),
-            Strikethrough=bool(resolved.get("Strikethrough")),
-            Superscript=bool(resolved.get("Superscript")),
-            Subscript=bool(resolved.get("Subscript")),
+            Highlight=resolved.get("Highlight") if isinstance(resolved.get("Highlight"), int) else None,
+            Language=resolved.get("LanguageID") if isinstance(resolved.get("LanguageID"), int) else None,
+            IsBold=bool(resolved.get("Bold")),
+            IsItalic=bool(resolved.get("Italic")),
+            IsUnderline=bool(resolved.get("Underline")),
+            IsStrikethrough=bool(resolved.get("Strikethrough")),
+            IsSuperscript=bool(resolved.get("Superscript")),
+            IsSubscript=bool(resolved.get("Subscript")),
         )
 
     def _decode_run_boundaries(self, raw: Any, run_count: int, text_length: int) -> list[int]:
@@ -874,17 +888,19 @@ class _Builder:
     def _build_richtext(self, node: LogicalNode) -> RichText:
         record = self.objects[node.oid]
         text = _decode_utf16(record.properties.get("RichEditTextUnicode")) or _decode_ascii_text(record.properties.get("TextExtendedAscii")) or ""
-        base_style = self._style_from_properties(record.properties)
+        base_style = self._text_style_from_properties(record.properties)
         rich_text = RichText(
             Text=text,
-            ParagraphStyle=base_style,
-            FontSize=(float(record.properties["FontSize"]) / 2.0) if isinstance(record.properties.get("FontSize"), int) else None,
+            TextRuns=[TextRun(Text=text, Style=base_style)] if text else None,
+            ParagraphStyle=self._paragraph_style_from_properties(record.properties),
+            Alignment=self._paragraph_alignment_from_properties(record.properties),
             Tags=self._collect_tags(record),
         )
 
         run_styles_raw = record.properties.get("TextRunFormatting")
 
         if isinstance(run_styles_raw, list) and run_styles_raw:
+            text_runs: list[TextRun] = []
             boundaries = self._decode_run_boundaries(record.properties.get("TextRunIndex"), len(run_styles_raw), len(text))
             if not boundaries or boundaries[0] != 0:
                 boundaries = [0] + boundaries
@@ -893,9 +909,8 @@ class _Builder:
                 start = boundaries[index] if index < len(boundaries) else 0
                 end = boundaries[index + 1] if index + 1 < len(boundaries) else len(text)
                 run_text = text[start:end]
-                rich_text.Runs.append(TextRun(Text=run_text, Style=self._style_from_properties(style_props), Start=start, End=end))
-        elif text:
-            rich_text.Runs.append(TextRun(Text=text, Style=base_style, Start=0, End=len(text)))
+                text_runs.append(TextRun(Text=run_text, Style=self._text_style_from_properties(style_props)))
+            rich_text._replace_text_runs(text_runs)
 
         return rich_text
 
@@ -924,7 +939,7 @@ class _Builder:
             Height=height,
             OriginalWidth=width,
             OriginalHeight=height,
-            HorizontalAlignment=_decode_layout_alignment(record.properties.get("LayoutAlignmentSelf"))
+            Alignment=_decode_layout_alignment(record.properties.get("LayoutAlignmentSelf"))
             or _decode_layout_alignment(record.properties.get("LayoutAlignmentInParent")),
             AlternativeTextDescription=_decode_utf16(record.properties.get("ImageAltText")),
             HyperlinkUrl=_decode_utf16(record.properties.get("WzHyperlinkUrl")),
@@ -942,10 +957,11 @@ class _Builder:
 
     def _build_table(self, node: LogicalNode) -> Table:
         record = self.objects[node.oid]
+        column_widths = _bytes_to_float_list(record.properties.get("TableColumnWidths"))
         table = Table(
             Tags=self._collect_tags(record),
-            ColumnWidths=_bytes_to_float_list(record.properties.get("TableColumnWidths")),
-            BordersVisible=bool(record.properties.get("TableBordersVisible", True)),
+            Columns=[TableColumn(Width=width) for width in column_widths],
+            IsBordersVisible=bool(record.properties.get("TableBordersVisible", True)),
         )
         for child in node.children:
             if child.kind == "TableRowNode":
@@ -968,21 +984,21 @@ class _Builder:
         record = self.objects[node.oid]
         fmt = _decode_number_list_format(record.properties.get("NumberListFormat"))
         restart = record.properties.get("ListRestart") if isinstance(record.properties.get("ListRestart"), int) else None
-        return NumberList(Format=fmt, Restart=restart, IsNumbered=bool(fmt))
+        return NumberList(Format=fmt, NumberFormat=fmt, Restart=restart)
 
     def _tag_from_record(self, record: OneStoreObject | None) -> list[NoteTag]:
         if record is None:
             return []
         label = _decode_utf16(record.properties.get("NoteTagLabel"))
-        tag = NoteTag(
-            shape=record.properties.get("NoteTagShape") if isinstance(record.properties.get("NoteTagShape"), int) else None,
-            label=label,
-            text_color=record.properties.get("NoteTagTextColor") if isinstance(record.properties.get("NoteTagTextColor"), int) else None,
-            highlight_color=record.properties.get("NoteTagHighlightColor") if isinstance(record.properties.get("NoteTagHighlightColor"), int) else None,
-            created=record.properties.get("NoteTagCreated") if isinstance(record.properties.get("NoteTagCreated"), int) else None,
-            completed=record.properties.get("NoteTagCompleted") if isinstance(record.properties.get("NoteTagCompleted"), int) else None,
+        tag = NoteTag._create(
+            Icon=record.properties.get("NoteTagShape") if isinstance(record.properties.get("NoteTagShape"), int) else None,
+            Label=label,
+            FontColor=record.properties.get("NoteTagTextColor") if isinstance(record.properties.get("NoteTagTextColor"), int) else None,
+            Highlight=record.properties.get("NoteTagHighlightColor") if isinstance(record.properties.get("NoteTagHighlightColor"), int) else None,
+            CreationTime=record.properties.get("NoteTagCreated") if isinstance(record.properties.get("NoteTagCreated"), int) else None,
+            CompletedTime=record.properties.get("NoteTagCompleted") if isinstance(record.properties.get("NoteTagCompleted"), int) else None,
         )
-        if tag.label or tag.shape is not None:
+        if tag.Label or tag.Icon is not None:
             return [tag]
         return []
 
@@ -993,15 +1009,15 @@ class _Builder:
         definition_ref = state_value.get("NoteTagDefinitionOid")
         if isinstance(definition_ref, ExtendedGUID):
             tags.extend(self._tag_from_record(self.objects.get(definition_ref)))
-        inline = NoteTag(
-            shape=state_value.get("NoteTagShape") if isinstance(state_value.get("NoteTagShape"), int) else None,
-            label=_decode_utf16(state_value.get("NoteTagLabel")),
-            text_color=state_value.get("NoteTagTextColor") if isinstance(state_value.get("NoteTagTextColor"), int) else None,
-            highlight_color=state_value.get("NoteTagHighlightColor") if isinstance(state_value.get("NoteTagHighlightColor"), int) else None,
-            created=state_value.get("NoteTagCreated") if isinstance(state_value.get("NoteTagCreated"), int) else None,
-            completed=state_value.get("NoteTagCompleted") if isinstance(state_value.get("NoteTagCompleted"), int) else None,
+        inline = NoteTag._create(
+            Icon=state_value.get("NoteTagShape") if isinstance(state_value.get("NoteTagShape"), int) else None,
+            Label=_decode_utf16(state_value.get("NoteTagLabel")),
+            FontColor=state_value.get("NoteTagTextColor") if isinstance(state_value.get("NoteTagTextColor"), int) else None,
+            Highlight=state_value.get("NoteTagHighlightColor") if isinstance(state_value.get("NoteTagHighlightColor"), int) else None,
+            CreationTime=state_value.get("NoteTagCreated") if isinstance(state_value.get("NoteTagCreated"), int) else None,
+            CompletedTime=state_value.get("NoteTagCompleted") if isinstance(state_value.get("NoteTagCompleted"), int) else None,
         )
-        if inline.label or inline.shape is not None:
+        if inline.Label or inline.Icon is not None:
             tags.append(inline)
         return tags
 

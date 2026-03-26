@@ -32,7 +32,8 @@ except ImportError:
 @unittest.skipUnless(HAS_REPORTLAB and HAS_PYPDF, "reportlab and pypdf are required")
 class TestAsposeNotePdfGoldens(unittest.TestCase):
     def test_pdf_goldens_match_manifest(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
 
         from tests._pdf_goldens import build_pdf_manifest
 
@@ -52,7 +53,7 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                 )
 
                 buf = io.BytesIO()
-                Document(source).Save(buf, PdfSaveOptions(SaveFormat.Pdf))
+                Document(source).Save(buf, PdfSaveOptions())
 
                 generated_pdf = failure_pdf_path(case.case_id)
                 generated_pdf.write_bytes(buf.getvalue())
@@ -88,7 +89,8 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
                     )
 
     def test_numbered_list_fixture_preserves_list_markers(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
 
         from tests._pdf_goldens import build_pdf_manifest
 
@@ -100,7 +102,7 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
         generated_pdf = failure_pdf_path("numbered_list_with_tags.markers")
 
         buf = io.BytesIO()
-        Document(source).Save(buf, PdfSaveOptions(SaveFormat.Pdf))
+        Document(source).Save(buf, PdfSaveOptions())
         generated_pdf.write_bytes(buf.getvalue())
 
         manifest = build_pdf_manifest(generated_pdf, fixture_name="NumberedListWithTags.one")
@@ -118,7 +120,8 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
             self.assertIn(expected, text)
 
     def test_attachment_fixture_exports_filename_only(self) -> None:
-        from aspose.note import Document, PdfSaveOptions, SaveFormat
+        from aspose.note import Document
+        from aspose.note.saving import PdfSaveOptions
 
         from tests._pdf_goldens import build_pdf_manifest
 
@@ -130,7 +133,7 @@ class TestAsposeNotePdfGoldens(unittest.TestCase):
         generated_pdf = failure_pdf_path("attached_file_with_tag.inline")
 
         buf = io.BytesIO()
-        Document(source).Save(buf, PdfSaveOptions(SaveFormat.Pdf))
+        Document(source).Save(buf, PdfSaveOptions())
         generated_pdf.write_bytes(buf.getvalue())
 
         manifest = build_pdf_manifest(generated_pdf, fixture_name="AttachedFileWithTag.one")

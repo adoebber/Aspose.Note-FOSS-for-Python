@@ -237,9 +237,21 @@ def _register_font_variant(group: str, bold: bool, italic: bool, require_unicode
 
 def _font_name_for_style(style, default_font: str, text: str = "", default_bold: bool = False) -> str:
     family_source = getattr(style, "FontName", None) or default_font
-    bold = bool(default_bold or getattr(style, "Bold", False))
-    italic = bool(getattr(style, "Italic", False))
+    bold = bool(default_bold or getattr(style, "IsBold", getattr(style, "Bold", False)))
+    italic = bool(getattr(style, "IsItalic", getattr(style, "Italic", False)))
     return _register_font_variant(_font_group_for_family(family_source), bold, italic, require_unicode=_text_requires_unicode_font(text))
+
+
+def _style_bool(style, new_name: str, legacy_name: str) -> bool:
+    return bool(getattr(style, new_name, getattr(style, legacy_name, False)))
+
+
+def _style_value(style, new_name: str, legacy_name: str, default=None):
+    return getattr(style, new_name, getattr(style, legacy_name, default))
+
+
+def _tag_value(tag, new_name: str, legacy_name: str, default=None):
+    return getattr(tag, new_name, getattr(tag, legacy_name, default))
 
 
 def _rgb_components(color: int | None, default: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> tuple[float, float, float]:
@@ -274,7 +286,7 @@ def _effective_text_color(style) -> tuple[float, float, float]:
 
 
 def _should_underline(style) -> bool:
-    return bool(getattr(style, "Underline", False) or getattr(style, "IsHyperlink", False) or getattr(style, "HyperlinkAddress", None))
+    return bool(_style_bool(style, "IsUnderline", "Underline") or getattr(style, "IsHyperlink", False) or getattr(style, "HyperlinkAddress", None))
 
 
 def _show_page(pdf, height: float) -> float:
@@ -311,7 +323,7 @@ def _fit_prefix_length(pdf, text: str, font_name: str, font_size: float, max_wid
 
 
 def _iter_runs(rich_text):
-    runs = list(getattr(rich_text, "Runs", []) or [])
+    runs = list(getattr(rich_text, "TextRuns", getattr(rich_text, "Runs", [])) or [])
     if runs:
         return runs
 
@@ -319,18 +331,21 @@ def _iter_runs(rich_text):
     if not text:
         return []
 
+    paragraph_style = getattr(rich_text, "ParagraphStyle", None)
+
     fallback_style = SimpleNamespace(
         FontName=None,
-        FontSize=getattr(rich_text, "FontSize", None),
-        FontColor=None,
-        HighlightColor=None,
-        Bold=False,
-        Italic=False,
-        Underline=False,
-        Strikethrough=False,
-        Superscript=False,
-        Subscript=False,
+        FontSize=getattr(paragraph_style, "FontSize", getattr(rich_text, "FontSize", None)),
+        FontColor=getattr(paragraph_style, "FontColor", None),
+        Highlight=getattr(paragraph_style, "Highlight", getattr(paragraph_style, "HighlightColor", None)),
+        IsBold=_style_bool(paragraph_style, "IsBold", "Bold") if paragraph_style is not None else False,
+        IsItalic=_style_bool(paragraph_style, "IsItalic", "Italic") if paragraph_style is not None else False,
+        IsUnderline=_style_bool(paragraph_style, "IsUnderline", "Underline") if paragraph_style is not None else False,
+        IsStrikethrough=_style_bool(paragraph_style, "IsStrikethrough", "Strikethrough") if paragraph_style is not None else False,
+        IsSuperscript=_style_bool(paragraph_style, "IsSuperscript", "Superscript") if paragraph_style is not None else False,
+        IsSubscript=_style_bool(paragraph_style, "IsSubscript", "Subscript") if paragraph_style is not None else False,
         HyperlinkAddress=None,
+        IsHyperlink=False,
     )
     return [SimpleNamespace(Text=text, Style=fallback_style)]
 
@@ -342,8 +357,8 @@ def _draw_segment(pdf, x: float, y: float, text: str, style, default_font: str, 
     font_size = max(float(getattr(style, "FontSize", None) or default_size), 1.0)
     font_name = _font_name_for_style(style, default_font, text=text, default_bold=default_bold)
     text_color = _effective_text_color(style)
-    highlight = getattr(style, "HighlightColor", None)
-    baseline_shift = 0.35 * font_size if getattr(style, "Superscript", False) else (-0.2 * font_size if getattr(style, "Subscript", False) else 0.0)
+    highlight = _style_value(style, "Highlight", "HighlightColor")
+    baseline_shift = 0.35 * font_size if _style_bool(style, "IsSuperscript", "Superscript") else (-0.2 * font_size if _style_bool(style, "IsSubscript", "Subscript") else 0.0)
     width = _string_width(pdf, text, font_name, font_size)
 
     if highlight is not None and hasattr(pdf, "rect"):
@@ -358,7 +373,7 @@ def _draw_segment(pdf, x: float, y: float, text: str, style, default_font: str, 
     if _should_underline(style) and hasattr(pdf, "line"):
         _set_stroke_color(pdf, text_color)
         pdf.line(x, y - (font_size * 0.15) + baseline_shift, x + width, y - (font_size * 0.15) + baseline_shift)
-    if getattr(style, "Strikethrough", False) and hasattr(pdf, "line"):
+    if _style_bool(style, "IsStrikethrough", "Strikethrough") and hasattr(pdf, "line"):
         _set_stroke_color(pdf, text_color)
         pdf.line(x, y + (font_size * 0.3) + baseline_shift, x + width, y + (font_size * 0.3) + baseline_shift)
 
@@ -470,23 +485,11 @@ def _render_inline_rich_texts(pdf, rich_texts, cursor_y: float, page_width: floa
 
 
 def _normalize_tag_icon_size(options: PdfSaveOptions | None) -> float:
-    raw_size = getattr(options, "TagIconSize", None) if options is not None else None
-    if raw_size is None:
-        return _DEFAULT_TAG_ICON_SIZE
-    try:
-        return max(float(raw_size), 6.0)
-    except (TypeError, ValueError):
-        return _DEFAULT_TAG_ICON_SIZE
+    return _DEFAULT_TAG_ICON_SIZE
 
 
 def _normalize_tag_icon_gap(options: PdfSaveOptions | None) -> float:
-    raw_gap = getattr(options, "TagIconGap", None) if options is not None else None
-    if raw_gap is None:
-        return _DEFAULT_TAG_ICON_GAP
-    try:
-        return max(float(raw_gap), 0.0)
-    except (TypeError, ValueError):
-        return _DEFAULT_TAG_ICON_GAP
+    return _DEFAULT_TAG_ICON_GAP
 
 
 def _normalize_tag_component(value: str) -> str:
@@ -515,8 +518,8 @@ def _tag_color(shape: int | None) -> tuple[float, float, float]:
 
 
 def _tag_symbol(tag) -> tuple[str, bool]:
-    shape = getattr(tag, "shape", None)
-    label = getattr(tag, "label", None) or ""
+    shape = _tag_value(tag, "Icon", "shape")
+    label = _tag_value(tag, "Label", "label") or ""
     if shape in _STAR_SHAPES:
         return "★", False
     if shape in _QUESTION_SHAPES:
@@ -610,8 +613,8 @@ def _tag_symbol(tag) -> tuple[str, bool]:
 
 
 def _tag_icon_candidates(tag) -> list[str]:
-    shape = getattr(tag, "shape", None)
-    label = getattr(tag, "label", None) or ""
+    shape = _tag_value(tag, "Icon", "shape")
+    label = _tag_value(tag, "Label", "label") or ""
     symbol, _ = _tag_symbol(tag)
     candidates: list[str] = []
     if shape is not None:
@@ -635,17 +638,6 @@ def _tag_icon_candidates(tag) -> list[str]:
 
 
 def _find_tag_icon_path(tag, options: PdfSaveOptions | None) -> Path | None:
-    icon_dir = getattr(options, "TagIconDir", None) if options is not None else None
-    if not icon_dir:
-        return None
-    base_dir = Path(icon_dir)
-    if not base_dir.exists() or not base_dir.is_dir():
-        return None
-    for candidate in _tag_icon_candidates(tag):
-        for suffix in _TAG_ICON_EXTENSIONS:
-            path = base_dir / f"{candidate}{suffix}"
-            if path.exists():
-                return path
     return None
 
 
@@ -852,7 +844,8 @@ def _render_note_tag(pdf, tag, x: float, baseline_y: float, options: PdfSaveOpti
         except Exception:
             pass
 
-    return _draw_tag_glyph(pdf, x, baseline_y, getattr(tag, "shape", None), _tag_color(getattr(tag, "shape", None)), icon_size)
+    shape = _tag_value(tag, "Icon", "shape")
+    return _draw_tag_glyph(pdf, x, baseline_y, shape, _tag_color(shape), icon_size)
 
 
 def _dedupe_tags(tags) -> list[object]:
@@ -860,12 +853,12 @@ def _dedupe_tags(tags) -> list[object]:
     result: list[object] = []
     for tag in tags or []:
         key = (
-            getattr(tag, "shape", None),
-            getattr(tag, "label", None),
-            getattr(tag, "text_color", None),
-            getattr(tag, "highlight_color", None),
-            getattr(tag, "created", None),
-            getattr(tag, "completed", None),
+            _tag_value(tag, "Icon", "shape"),
+            _tag_value(tag, "Label", "label"),
+            _tag_value(tag, "FontColor", "text_color"),
+            _tag_value(tag, "Highlight", "highlight_color"),
+            _tag_value(tag, "CreationTime", "created"),
+            _tag_value(tag, "CompletedTime", "completed"),
         )
         if key in seen:
             continue
@@ -904,13 +897,13 @@ def _simple_text_style(font_size: float, *, bold: bool = False, italic: bool = F
         FontName=None,
         FontSize=font_size,
         FontColor=font_color,
-        HighlightColor=None,
-        Bold=bold,
-        Italic=italic,
-        Underline=False,
-        Strikethrough=False,
-        Superscript=False,
-        Subscript=False,
+        Highlight=None,
+        IsBold=bold,
+        IsItalic=italic,
+        IsUnderline=False,
+        IsStrikethrough=False,
+        IsSuperscript=False,
+        IsSubscript=False,
         HyperlinkAddress=None,
         IsHyperlink=False,
     )
@@ -1149,11 +1142,7 @@ def _resolve_image_draw_size(image, image_reader, page_width: float, cursor_y: f
 
 
 def _rich_text_alignment(rich_text) -> HorizontalAlignment | None:
-    for run in _iter_runs(rich_text):
-        alignment = getattr(getattr(run, "Style", None), "HorizontalAlignment", None)
-        if alignment is not None:
-            return alignment
-    return None
+    return getattr(rich_text, "Alignment", None)
 
 
 def _measure_runs_width(pdf, runs, default_font: str, default_size: float, default_bold: bool = False) -> float:
@@ -1398,7 +1387,7 @@ def _image_to_flowable(image, max_width: float):
     image_reader = ImageReader(BytesIO(bytes(image.Bytes)))
     draw_width, draw_height = _resolve_image_draw_size(image, image_reader, max_width, 10_000.0, start_x=0.0, max_width=max_width)
     flowable = FlowImage(BytesIO(bytes(image.Bytes)), width=draw_width, height=draw_height)
-    flowable.hAlign = _flowable_alignment_value(getattr(image, "HorizontalAlignment", None))
+    flowable.hAlign = _flowable_alignment_value(getattr(image, "Alignment", None))
     return flowable
 
 
@@ -1406,8 +1395,8 @@ def _table_cell_alignment(cell) -> HorizontalAlignment | None:
     from ..model import Image, RichText
 
     for node in _iter_renderable_descendants(cell):
-        if isinstance(node, Image) and getattr(node, "HorizontalAlignment", None) is not None:
-            return node.HorizontalAlignment
+        if isinstance(node, Image) and getattr(node, "Alignment", None) is not None:
+            return node.Alignment
         if isinstance(node, RichText):
             alignment = _rich_text_alignment(node)
             if alignment is not None:
@@ -1521,7 +1510,11 @@ def _resolve_table_column_widths(table, column_count: int, available_width: floa
     if column_count <= 0:
         return []
 
-    raw_widths = [float(width) for width in getattr(table, "ColumnWidths", []) if float(width) > 1.0]
+    raw_widths = [
+        float(width)
+        for width in [getattr(column, "Width", None) for column in getattr(table, "Columns", getattr(table, "ColumnWidths", []))]
+        if width is not None and float(width) > 1.0
+    ]
     if len(raw_widths) >= column_count:
         total_width = sum(raw_widths[:column_count])
         if total_width > 0:
@@ -1649,7 +1642,7 @@ def _render_image(pdf, image, cursor_y: float, page_width: float, page_height: f
         img = ImageReader(BytesIO(bytes(image.Bytes)))
         draw_width, draw_height = _resolve_image_draw_size(image, img, page_width, cursor_y, start_x=start_x, max_width=max_width)
         container_width = _container_width(page_width, start_x, max_width)
-        draw_x = _aligned_x(start_x, draw_width, container_width, getattr(image, "HorizontalAlignment", None))
+        draw_x = _aligned_x(start_x, draw_width, container_width, getattr(image, "Alignment", None))
         draw_y = max(_BOTTOM_MARGIN, cursor_y - draw_height)
         pdf.drawImage(img, draw_x, draw_y, width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
         if tag_offset:

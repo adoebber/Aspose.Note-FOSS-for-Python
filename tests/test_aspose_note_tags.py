@@ -19,11 +19,11 @@ def _fixture_path(name: str) -> Path | None:
 
 
 def _tag_is_meaningful(tag) -> bool:
-    return bool(getattr(tag, "label", None)) or (getattr(tag, "shape", None) is not None)
+    return bool(getattr(tag, "Label", None)) or (getattr(tag, "Icon", None) is not None)
 
 
 def _collect_all_tags(doc):
-    from aspose.note import AttachedFile, Image, OutlineElement, RichText, Table
+    from aspose.note import AttachedFile, Image, RichText, Table
 
     tags = []
     for rt in doc.GetChildNodes(RichText):
@@ -32,8 +32,6 @@ def _collect_all_tags(doc):
         tags.extend(getattr(img, "Tags", None) or [])
     for tbl in doc.GetChildNodes(Table):
         tags.extend(getattr(tbl, "Tags", None) or [])
-    for oe in doc.GetChildNodes(OutlineElement):
-        tags.extend(getattr(oe, "Tags", None) or [])
     for af in doc.GetChildNodes(AttachedFile):
         tags.extend(getattr(af, "Tags", None) or [])
     return tags
@@ -47,7 +45,7 @@ def _rt_text_and_labels(node) -> tuple[str, set[str]]:
     if not rts:
         return "", set()
     rt = rts[0]
-    labels = {getattr(t, "label", None) for t in (getattr(rt, "Tags", None) or [])}
+    labels = {getattr(t, "Label", None) for t in (getattr(rt, "Tags", None) or [])}
     labels.discard(None)
     return getattr(rt, "Text", "") or "", labels
 
@@ -165,6 +163,8 @@ class TestAsposeNoteTags(unittest.TestCase):
         # This outline should contain two top-level list groups (as shown in the fixture UI).
         top_level = [c for c in list_outline if isinstance(c, OutlineElement)]  # type: ignore[union-attr]
         self.assertEqual(len(top_level), 2)
+        self.assertFalse(hasattr(top_level[0], "Tags"))
+        self.assertFalse(hasattr(top_level[0], "IndentLevel"))
 
         # Verify concrete texts and concrete tag labels per top-level list group.
         text0, labels0 = _rt_text_and_labels(top_level[0])
@@ -224,6 +224,3 @@ class TestAsposeNoteTags(unittest.TestCase):
         tags = _collect_all_tags(doc)
         self.assertGreaterEqual(len(tags), 1)
         self.assertTrue(any(_tag_is_meaningful(t) for t in tags))
-
-        # Prefer that tags are attached directly to the attachment node.
-        self.assertTrue(any(getattr(a, "Tags", None) for a in atts))

@@ -9,7 +9,7 @@ Quick links: [📚 Examples](examples/) • [📦 PyPI](https://pypi.org/project
 
 ✅ **Official Aspose project** — **100% free & open-source**. Provides an Aspose.Note-compatible Python API for working with OneNote `.one` files.
 
-This repository provides a Python library with an **Aspose.Note-shaped public API** for reading Microsoft OneNote files (`.one`).
+This repository provides a Python library with a **subset-compatible Aspose.Note for .NET-shaped public API** for reading Microsoft OneNote files (`.one`).
 
 The goal is to offer a familiar surface (`aspose.note.*`) inspired by [Aspose.Note for .NET](https://products.aspose.com/note/net/), backed by this repository’s built-in MS-ONE/OneStore parser.
 
@@ -22,8 +22,8 @@ The goal is to offer a familiar surface (`aspose.note.*`) inspired by [Aspose.No
   - ✅ Images (bytes, file name, dimensions)
   - ✅ Attached files (bytes, file name)
   - ✅ Tables (rows/cells + cell content)
-  - ✅ OneNote tags (NoteTag) on text/images/tables/list elements
-  - ✅ Numbered lists (NumberList) and indent levels
+  - ✅ OneNote tags (NoteTag) on text/images/tables and tagged list content
+  - ✅ Numbered lists (NumberList) and nested outline elements
 - ✅ PDF export via `Document.Save(..., SaveFormat.Pdf)` (uses ReportLab)
 
 ## 🚀 Quick start
@@ -33,10 +33,11 @@ from aspose.note import Document
 
 doc = Document("testfiles/SimpleTable.one")
 print(doc.DisplayName)
-print(doc.Count())
+pages = list(doc)
+print(len(pages))
 
 # pages are direct children of Document
-for page in doc:
+for page in pages:
     print(page.Title.TitleText.Text)
 ```
 
@@ -113,23 +114,27 @@ PyPI release page (maintainers): https://pypi.org/manage/project/aspose-note/rel
 
 ## 🧩 Public API (what is considered supported)
 
-Only the `aspose.note` package is considered **public and supported**.
+The supported public entry points are `aspose.note` and `aspose.note.saving`.
 Everything under `aspose.note._internal` is internal implementation detail and may change.
 
-Below is a complete list of objects exported from `aspose.note.__init__`.
+Below is the supported public surface across those entry points.
 
 ### 🧭 Document and traversal
 
 - `Document(source=None, load_options=None)`
   - `DisplayName: str | None`
   - `CreationTime: datetime | None`
-  - `Count() -> int` — number of pages (direct children of Document)
   - iteration: `for page in doc: ...`
   - `FileFormat -> FileFormat` (best-effort)
-  - `GetPageHistory(page) -> list[Page]` (currently returns `[page]`)
+  - `GetPageHistory(page) -> PageHistory`
   - `DetectLayoutChanges()` (compatibility stub)
   - `Save(target, format_or_options=None)`
     - supported: `SaveFormat.Pdf` only
+
+- `PageHistory`
+  - `Current: Page`
+  - `Count: int`, `IsReadOnly: bool`
+  - iteration/indexing over historical revisions only
 
 - `DocumentVisitor` — base visitor for traversal:
   - `VisitDocumentStart/End`, `VisitPageStart/End`, `VisitTitleStart/End`, `VisitOutlineStart/End`,
@@ -140,7 +145,7 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
   - `Document` (property) — walk up to the root `Document`
   - `Accept(visitor)`
 
-- `CompositeNode(Node)`
+- Container nodes (`Document`, `Page`, `Title`, `Outline`, `OutlineElement`, `Image`, `Table`, `TableRow`, `TableCell`)
   - `FirstChild`, `LastChild`
   - `AppendChildLast(node)`, `AppendChildFirst(node)`, `InsertChild(index, node)`, `RemoveChild(node)`
   - `GetEnumerator()` / iteration `for child in node: ...`
@@ -148,49 +153,56 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
 
 ### 🏗️ Document structure
 
-- `Page(CompositeNode)`
+- `Page`
   - `Title: Title | None`
   - `Author: str | None`
   - `CreationTime: datetime | None`, `LastModifiedTime: datetime | None`
   - `Level: int | None`
   - `Clone(deep=False) -> Page` (minimal clone)
 
-- `Title(CompositeNode)`
+- `Title`
   - `TitleText: RichText | None`
   - `TitleDate: RichText | None`
   - `TitleTime: RichText | None`
 
-- `Outline(CompositeNode)`
-  - `X`, `Y`, `Width` (positioning)
+- `Outline`
+  - `HorizontalOffset`, `VerticalOffset`, `MaxWidth`
+  - `MaxHeight`, `MinWidth`, `ReservedWidth`, `IndentPosition`
+  - `DescendantsCannotBeMoved`, `LastModifiedTime`
 
-- `OutlineElement(CompositeNode)`
-  - `IndentLevel: int`
+- `OutlineElement`
   - `NumberList: NumberList | None`
-  - `Tags: list[NoteTag]`
 
 ### 📝 Content
 
-- `RichText(CompositeNode)`
+- `RichText(Node)`
   - `Text: str`
-  - `Runs: list[TextRun]` — formatted segments
-  - `FontSize: float | None`
+  - `TextRuns: list[TextRun]` — formatted segments
+  - `ParagraphStyle: ParagraphStyle`
+  - `Length: int`
+  - `Alignment: HorizontalAlignment | None`
   - `Tags: list[NoteTag]`
   - `Append(text, style=None) -> RichText`
-  - `Replace(old_value, new_value) -> None`
+  - `Replace(old_value, new_value) -> RichText`
+  - `IndexOf(...) -> int`
 
-- `TextRun(Node)`
+- `TextRun`
   - `Text: str`
   - `Style: TextStyle`
-  - `Start: int | None`, `End: int | None`
 
-- `TextStyle(Node)`
-  - `Bold/Italic/Underline/Strikethrough/Superscript/Subscript: bool`
+- `ParagraphStyle`
+  - default paragraph-level text formatting used by `RichText.ParagraphStyle`
+
+- `TextStyle`
+  - `IsBold/IsItalic/IsUnderline/IsStrikethrough/IsSuperscript/IsSubscript: bool`
+  - `IsHidden: bool`, `IsMathFormatting: bool`
   - `FontName: str | None`, `FontSize: float | None`
-  - `FontColor: int | None`, `HighlightColor: int | None`
-  - `LanguageId: int | None`
+  - `FontColor: int | None`, `Highlight: int | None`
+  - `Language: int | None`
+  - `FontStyle: int`
   - `IsHyperlink: bool`, `HyperlinkAddress: str | None`
 
-- `Image(CompositeNode)`
+- `Image`
   - `FileName: str | None`, `Bytes: bytes`
   - `Width: float | None`, `Height: float | None`
   - `AlternativeTextTitle: str | None`, `AlternativeTextDescription: str | None`
@@ -198,23 +210,30 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
   - `Tags: list[NoteTag]`
   - `Replace(image) -> None` — replace image contents
 
-- `AttachedFile(CompositeNode)`
+- `AttachedFile(Node)`
   - `FileName: str | None`, `Bytes: bytes`
   - `Tags: list[NoteTag]`
 
-- `Table(CompositeNode)`
-  - `ColumnWidths: list[float]`
-  - `BordersVisible: bool`
+- `Table`
+  - `Columns: list[TableColumn]`
+  - `IsBordersVisible: bool`
   - `Tags: list[NoteTag]`
 
-- `TableRow(CompositeNode)`, `TableCell(CompositeNode)`
+- `TableColumn`
+  - `Width: float | None`
+  - `LockedWidth: bool`
 
-- `NoteTag(Node)`
-  - fields: `shape`, `label`, `text_color`, `highlight_color`, `created`, `completed`
-  - `CreateYellowStar()` — convenience factory
+- `TableRow`, `TableCell`
 
-- `NumberList(Node)`
-  - `Format: str | None`, `Restart: int | None`, `IsNumbered: bool`
+- `NoteTag`
+  - `Label`, `Icon`, `Status`, `Highlight`, `CreationTime`, `CompletedTime`, `FontColor`
+  - `CreateYellowStar()`, `CreateQuestionMark()` — convenience factories
+
+- `NumberList`
+  - `Format: str | None`, `NumberFormat: str | None`
+  - `Font: str | None`, `FontSize: float | None`, `FontColor: int | None`
+  - `IsBold: bool`, `IsItalic: bool`, `Restart: int | None`
+  - `GetNumberedListHeader(number) -> str`
 
 ### ⚙️ Load/save options
 
@@ -222,12 +241,14 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
   - `DocumentPassword: str | None` (password/encryption is **not supported**)
   - `LoadHistory: bool`
 
-- `SaveOptions` (base)
+- `aspose.note.saving.SaveOptions` (base)
+  - abstract compatibility base type
   - `SaveFormat: SaveFormat`
+  - `PageIndex: int`, `PageCount: int | None`, `FontsSubsystem`
 
-- `PdfSaveOptions(SaveOptions)` (subset)
+- `aspose.note.saving.PdfSaveOptions(SaveOptions)` (subset)
   - `PageIndex: int`, `PageCount: int | None`
-  - `TagIconDir: str | None`, `TagIconSize: float | None`, `TagIconGap: float | None`
+  - `ImageCompression`, `JpegQuality`, `PageSettings`, `PageSplittingAlgorithm`
 
 ### 🔢 Enums
 
@@ -238,7 +259,6 @@ Below is a complete list of objects exported from `aspose.note.__init__`.
 
 ### 🚨 Exceptions
 
-- `AsposeNoteError` (base)
 - `FileCorruptedException`
 - `IncorrectDocumentStructureException`
 - `IncorrectPasswordException`
@@ -271,17 +291,15 @@ for i, img in enumerate(doc.GetChildNodes(Image), start=1):
         f.write(img.Bytes)
 ```
 
-### 🏷️📄 Export an MS OneNote document to PDF (custom tag icons)
+### 🏷️📄 Export an MS OneNote document to PDF
 
 ```python
-from aspose.note import Document, PdfSaveOptions, SaveFormat
+from aspose.note import Document, SaveFormat
+from aspose.note.saving import PdfSaveOptions
 
 doc = Document("testfiles/TagSizes.one")
 opts = PdfSaveOptions(
-    SaveFormat=SaveFormat.Pdf,
-    TagIconDir="./tag-icons",
-    TagIconSize=10,
-    TagIconGap=2,
+  JpegQuality=90,
 )
 doc.Save("out.pdf", opts)
 ```
@@ -297,7 +315,7 @@ with one_path.open("rb") as f:
   doc = Document(f)
 
 print(doc.DisplayName)
-print(doc.Count())
+print(len(list(doc)))
 ```
 
 ### 🧭 Traverse MS OneNote document structure (DOM) and print a simple outline
@@ -354,7 +372,7 @@ from aspose.note import Document, RichText
 
 doc = Document("testfiles/FormattedRichText.one")
 for rt in doc.GetChildNodes(RichText):
-  for run in rt.Runs:
+  for run in rt.TextRuns:
     if run.Style.IsHyperlink and run.Style.HyperlinkAddress:
       print(run.Text, "->", run.Style.HyperlinkAddress)
 ```
@@ -368,7 +386,7 @@ doc = Document("testfiles/TagSizes.one")
 
 def dump_tags(kind: str, tags) -> None:
   for t in tags:
-    print(kind, "tag:", t.label)
+    print(kind, "tag:", t.Label, t.Icon)
 
 for rt in doc.GetChildNodes(RichText):
   dump_tags("RichText", rt.Tags)
@@ -388,7 +406,7 @@ from aspose.note import Document, Table, TableRow, TableCell, RichText
 doc = Document("testfiles/SimpleTable.one")
 
 for table in doc.GetChildNodes(Table):
-  print("Table columns:", table.ColumnWidths)
+  print("Table columns:", [column.Width for column in table.Columns])
   for row_index, row in enumerate(table.GetChildNodes(TableRow), start=1):
     cells = row.GetChildNodes(TableCell)
     values: list[str] = []
@@ -412,7 +430,7 @@ for i, af in enumerate(doc.GetChildNodes(AttachedFile), start=1):
   print("saved:", name)
 ```
 
-### 🔢 Inspect numbered lists in an MS OneNote document (NumberList + indentation)
+### 🔢 Inspect numbered lists in an MS OneNote document
 
 ```python
 from aspose.note import Document, OutlineElement
@@ -424,9 +442,8 @@ for oe in doc.GetChildNodes(OutlineElement):
   if nl is None:
     continue
   print(
-    "indent=", oe.IndentLevel,
-    "is_numbered=", nl.IsNumbered,
     "format=", nl.Format,
+    "number_format=", nl.NumberFormat,
     "restart=", nl.Restart,
   )
 ```
@@ -455,7 +472,7 @@ Run tests:
 
 ```bash
 python -m pip install -e ".[pdf]"
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m pytest -q
 ```
 
 Third-party license notices (e.g., ReportLab used for PDF export) are in [THIRD_PARTY_NOTICES.md](https://github.com/aspose-note/aspose-note-python/blob/main/THIRD_PARTY_NOTICES.md).
