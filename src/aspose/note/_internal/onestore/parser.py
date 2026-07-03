@@ -560,6 +560,8 @@ def _process_group(data: bytes, state: ObjectSpaceState, group_ref: tuple[int, i
     local_gid_table = dict(gid_table)
     for node in _parse_file_node_list(data, group_ref[0], group_ref[1]):
         if node.file_node_id == 0x024:
+            if len(node.payload) < 20:
+                continue
             index = struct.unpack_from("<I", node.payload, 0)[0]
             local_gid_table[index] = _read_guid(node.payload, 4)
             continue
@@ -612,6 +614,8 @@ def _process_revision_manifest(
                 order_index=order_index,
             )
         elif node.file_node_id == 0x024:
+            if len(node.payload) < 20:
+                continue
             index = struct.unpack_from("<I", node.payload, 0)[0]
             gid_table[index] = _read_guid(node.payload, 4)
         elif node.file_node_id == 0x025:
