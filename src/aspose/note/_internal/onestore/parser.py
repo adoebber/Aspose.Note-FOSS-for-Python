@@ -311,7 +311,9 @@ def _parse_scalar_from_array(data: bytes, offset: int, property_type: int) -> tu
     return None, offset
 
 
-def _parse_property_set(data: bytes, offset: int, state: _PropertyState) -> tuple[dict[str, Any], list[tuple[str, Any]], int]:
+def _parse_property_set(
+    data: bytes, offset: int, state: _PropertyState
+) -> tuple[dict[str, Any], list[tuple[str, Any]], int]:
     start = offset
     if offset + 2 > len(data):
         return {}, [], 0
@@ -437,7 +439,10 @@ def _parse_object_blob(blob: bytes, gid_table: dict[int, str]) -> tuple[dict[str
         pass
 
     state = _PropertyState(object_ids=object_ids)
-    properties, raw_properties, _ = _parse_property_set(blob, offset, state)
+    try:
+        properties, raw_properties, _ = _parse_property_set(blob, offset, state)
+    except struct.error:
+        properties, raw_properties = {}, []
     return properties, raw_properties
 
 
@@ -579,10 +584,14 @@ def _process_group(data: bytes, state: ObjectSpaceState, group_ref: tuple[int, i
             if parsed.jcid_name == "SectionMetaData" and "SectionDisplayName" in parsed.properties:
                 value = parsed.properties["SectionDisplayName"]
                 if isinstance(value, bytes):
-                    state.section_display_name = value.decode("utf-16le", errors="ignore").rstrip("\x00") or state.section_display_name
+                    state.section_display_name = (
+                        value.decode("utf-16le", errors="ignore").rstrip("\x00") or state.section_display_name
+                    )
 
 
-def _process_revision_manifest(data: bytes, gosid: ExtendedGUID, nodes: list[FileNode], order_index: int) -> RevisionManifestRecord | None:
+def _process_revision_manifest(
+    data: bytes, gosid: ExtendedGUID, nodes: list[FileNode], order_index: int
+) -> RevisionManifestRecord | None:
     gid_table: dict[int, str] = {}
     temporary_state = ObjectSpaceState(gosid=gosid)
     revision: RevisionManifestRecord | None = None
@@ -591,7 +600,11 @@ def _process_revision_manifest(data: bytes, gosid: ExtendedGUID, nodes: list[Fil
         if node.file_node_id in {0x01B, 0x01E, 0x01F}:
             rid = _read_extended_guid(node.payload, 0)
             rid_dependent = _read_extended_guid(node.payload, 20) if len(node.payload) >= 40 else None
-            context_id = _read_extended_guid(node.payload, 40) if node.file_node_id == 0x01F and len(node.payload) >= 60 else None
+            context_id = (
+                _read_extended_guid(node.payload, 40)
+                if node.file_node_id == 0x01F and len(node.payload) >= 60
+                else None
+            )
             revision = RevisionManifestRecord(
                 rid=rid,
                 rid_dependent=rid_dependent,
@@ -670,7 +683,9 @@ def _resolve_revision_root(state: ObjectSpaceState, revision: RevisionManifestRe
     return _effective_revision_roots(state, revision).get(role)
 
 
-def _build_revision_snapshot(state: ObjectSpaceState, revision: RevisionManifestRecord) -> dict[ExtendedGUID, OneStoreObject]:
+def _build_revision_snapshot(
+    state: ObjectSpaceState, revision: RevisionManifestRecord
+) -> dict[ExtendedGUID, OneStoreObject]:
     snapshot: dict[ExtendedGUID, OneStoreObject] = {}
     for item in _iter_revision_chain(state, revision):
         snapshot.update(item.objects)
@@ -738,13 +753,17 @@ def _process_revision_manifest_list(data: bytes, state: ObjectSpaceState, nodes:
         if node.file_node_id == 0x05C:
             rid = _read_extended_guid(node.payload, 0)
             role = struct.unpack_from("<I", node.payload, 20)[0]
-            state.role_bindings.append(RevisionRoleBinding(rid=rid, context_id=None, role=role, order_index=order_index))
+            state.role_bindings.append(
+                RevisionRoleBinding(rid=rid, context_id=None, role=role, order_index=order_index)
+            )
             order_index += 1
         elif node.file_node_id == 0x05D:
             rid = _read_extended_guid(node.payload, 0)
             role = struct.unpack_from("<I", node.payload, 20)[0]
             context_id = _read_extended_guid(node.payload, 24)
-            state.role_bindings.append(RevisionRoleBinding(rid=rid, context_id=context_id, role=role, order_index=order_index))
+            state.role_bindings.append(
+                RevisionRoleBinding(rid=rid, context_id=context_id, role=role, order_index=order_index)
+            )
             order_index += 1
 
     _materialize_latest_roots(state)
@@ -809,4 +828,6 @@ def parse_onestore_file(source: str | Path | BinaryIO) -> OneStoreFile:
             gosid = _read_extended_guid(node.payload, ref_size)
             object_spaces.append(_parse_object_space(data, gosid, (list_offset, list_size)))
 
-    return OneStoreFile(data=data, object_spaces=object_spaces, file_data_store=file_data_store, display_name=display_name)
+    return OneStoreFile(
+        data=data, object_spaces=object_spaces, file_data_store=file_data_store, display_name=display_name
+    )
